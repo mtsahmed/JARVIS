@@ -43,20 +43,17 @@ class ReminderAlerts:
 
     def __init__(self) -> None:
         self.voice_queue: queue.Queue[str] | None = None  # set when voice mode starts
-        try:
-            from jarvis.integrations.notify import WindowsNotifier
+        # WindowsNotifier loads its native libraries on the first notification, after the speech
+        # model (loading them earlier crashes faster-whisper; see integrations/notify.py).
+        from jarvis.integrations.notify import WindowsNotifier
 
-            self._notifier: object | None = WindowsNotifier()
-        except Exception as e:  # notifications are optional; reminders still print/speak
-            logger.error("Desktop notifications unavailable: %s", type(e).__name__)
-            self._notifier = None
+        self._notifier = WindowsNotifier()
 
     def __call__(self, reminder: Reminder, missed: bool) -> None:
         message = reminder.text
         if missed:
             message = f"Missed reminder from {describe_when(reminder.due, local_now())}: {reminder.text}"
-        if self._notifier is not None:
-            self._notifier.notify("Jarvis reminder", message)  # type: ignore[attr-defined]
+        self._notifier.notify("Jarvis reminder", message)
         if self.voice_queue is not None:
             self.voice_queue.put(f"Reminder: {message}" if not missed else message)
         else:
