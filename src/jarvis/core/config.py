@@ -25,6 +25,7 @@ _KEYS = (
     "JARVIS_HISTORY_TURNS",
     "JARVIS_REASONING_EFFORT",
     "JARVIS_DATA_DIR",
+    "JARVIS_FILE_SEARCH_DIRS",
 )
 
 # Secret key required for each supported LLM provider.
@@ -49,6 +50,7 @@ class Config:
     project_root: Path
     logs_dir: Path
     data_dir: Path  # local databases (reminders, ...); gitignored
+    file_search_dirs: tuple[Path, ...]  # folders file search may index; empty = file search off
     # None = do not send; the provider uses its default.
     reasoning_effort: str | None
     # repr=False keeps the key out of repr()/str(), and therefore out of logs.
@@ -94,6 +96,19 @@ def _resolve_dir(value: str, project_root: Path) -> Path:
     return path if path.is_absolute() else project_root / path
 
 
+def _existing_dirs(value: str, env_path: Path) -> tuple[Path, ...]:
+    r"""Semicolon-separated absolute folders, e.g. C:\Users\me\Documents;D:\Notes."""
+    dirs = []
+    for part in (p.strip() for p in value.split(";")):
+        if not part:
+            continue
+        path = Path(part)
+        if not path.is_absolute() or not path.is_dir():
+            raise ConfigError(f"JARVIS_FILE_SEARCH_DIRS: {part!r} is not an existing absolute folder (see {env_path}).")
+        dirs.append(path)
+    return tuple(dirs)
+
+
 def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> Config:
     """Build a validated Config. Raises ConfigError with a clear message on problems."""
     env_path = env_path or project_root / ".env"
@@ -118,6 +133,7 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         project_root=project_root,
         logs_dir=project_root / "logs",
         data_dir=_resolve_dir(values.get("JARVIS_DATA_DIR", "data"), project_root),
+        file_search_dirs=_existing_dirs(values.get("JARVIS_FILE_SEARCH_DIRS", ""), env_path),
         reasoning_effort=reasoning_effort,
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
     )

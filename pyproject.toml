@@ -28,6 +28,9 @@ dependencies = [
     # windows-toasts: desktop notifications for due reminders (Apache-2.0; only 5 WinRT packages);
     # imported only in src/jarvis/integrations/notify.py.
     "windows-toasts>=1.3,<2",
+    # pypdf: text extraction from PDFs for file search/reading (BSD-3-Clause, pure Python, no native DLLs);
+    # imported only in src/jarvis/tools/file_text.py.
+    "pypdf>=6.19,<7",
 ]
 
 [project.optional-dependencies]
