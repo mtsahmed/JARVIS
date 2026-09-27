@@ -1,6 +1,7 @@
-# Jarvis — Requirements (v0.2)
+# Jarvis — Requirements (v0.3)
 
-Status: Phase 0 complete · Last updated: 2026-09-27
+Status: Phase 1 complete · Phase 2 implemented (latency target still open) · Last updated: 2026-09-27
+Changes from v0.2: Phase 2 measurements (§9); STT model chosen; push-to-talk key set to Right Ctrl; free disk known; open items updated.
 Changes from v0.1: voice-first interaction; providers set to OpenAI (LLM), hybrid voice (local + ElevenLabs), Google search; roadmap added.
 
 ## 1. Purpose
@@ -14,7 +15,7 @@ A personal assistant, **primarily controlled by voice**, that runs on the owner'
 | OS | Windows | PowerShell, `pathlib` for paths, Windows notifications |
 | Hosting | Laptop only | Jarvis runs only while the laptop is on; missed reminders fire at next startup |
 | Language | American English | Single language for STT/TTS |
-| Free disk | TBD | Needed before building the file index |
+| Free disk | 17 GB free (2026-09-27) | Enough for speech models (~0.7 GB) and the file index |
 
 ## 3. Core use cases (priority order)
 **Primary interaction is voice** (spoken request → spoken reply). Text is the fallback and the development/debug interface. Every use case must be usable end-to-end by voice.
@@ -32,9 +33,9 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | Role | Provider (v1) | Cost basis | Monthly target |
 |---|---|---|---|
 | LLM (brain) | OpenAI API, cheapest model with reliable tool calling (exact model chosen in Phase 1 from current OpenAI docs) | Pay-as-you-go; $10 prepaid credit | ≤ $4 |
-| Speech-to-text | Local CPU model first (candidate: faster-whisper, small model). Fallback: a cloud STT, chosen after benchmark. | Free if local | $0–1 |
-| Text-to-speech (everyday replies) | Free built-in Windows voice (candidate: pyttsx3 over Windows SAPI5) | Free | $0 |
-| Text-to-speech (premium) | ElevenLabs free tier (10,000 credits/month) used **only** for the daily email briefing; Flash model preferred | Free tier; personal use only (no commercial license) | $0 |
+| Speech-to-text | Local CPU: faster-whisper `base.en`, int8, beam 5 (chosen by benchmark, §9). Cloud STT not needed so far. | Free | $0 |
+| Text-to-speech (everyday replies) | Free built-in Windows voice: pyttsx3 over SAPI5 (confirmed) | Free | $0 |
+| Text-to-speech (premium) | ElevenLabs free tier (10,000 credits/month) used **only** for the daily email briefing; `eleven_flash_v2_5`, `pcm_22050` output, original volume. Voice Library voices are not available via the API on the free tier; ElevenLabs Default voices expire 2026-12-31 | Free tier; personal use only (no commercial license) | $0 |
 | Web search | Google Custom Search JSON API (existing key) | 100 queries/day free | $0 |
 | **Total** | | | **≤ $5/month** |
 
@@ -47,7 +48,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. Audio is processed locally when possible.
 - **Security:** Secrets live in `.env` (never committed), later the Windows Credential Manager. Google OAuth uses read-only scopes. Every tool call is written to an audit log. A key that is ever exposed gets rotated immediately.
 - **Control:** Permission tiers are AUTO (read-only / local reminders), CONFIRM (anything that sends, deletes, or modifies external data), and BLOCKED (shell commands, payments, credential access).
-- **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (to be measured). Replies are short and speakable; details appear on screen.
+- **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s, **not yet met**; see §9). Replies are short and speakable; details appear on screen.
 - **Voice confirmations:** CONFIRM-tier actions are read back aloud and require a spoken "yes" (plus an on-screen button). Silence or unclear speech counts as "no".
 - **Reliability:** Graceful failure when offline or a provider is down; reminders still fire offline; text input always works if voice fails; if ElevenLabs quota is exhausted, fall back to the local voice.
 - **Maintainability:** Modular Python, one adapter per provider, tests for every tool.
@@ -68,8 +69,8 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | # | Phase | Deliverable | Done when |
 |---|---|---|---|
 | 0 | Requirements & environment ✅ | This document, repo, venv | Complete |
-| 1 | **Text core** ← current | Config, OpenAI adapter, CLI chat, logging, usage tracking | Multi-turn chat works; tokens logged; no secrets in Git |
-| 2 | Voice | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
+| 1 | Text core ✅ | Config, OpenAI adapter, CLI chat, logging, usage tracking | Multi-turn chat works; tokens logged; no secrets in Git |
+| 2 | **Voice** ← current (implemented; latency follow-up open) | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
 | 3 | Tools + permissions | Reminders, file search, web search tools; permission tiers; audit log | All three tools work by voice; CONFIRM flow works by voice |
 | 4 | Memory | Persistent facts and history, semantic recall | Recalls something from a previous session |
 | 5 | Integrations & automation | Gmail read-only briefing, scheduled jobs, search replacement chosen | Morning briefing runs daily for a week |
@@ -78,10 +79,38 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 8 | Expansion | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
 
 ## 8. Open items
-- Free disk space
 - Which folders file search may index
 - Confirm the Google Programmable Search Engine searches the whole web (not site-restricted)
 - Replacement web search provider before Dec 2026
 - Definition of "important" emails for the briefing
-- STT benchmark: local model accuracy, latency, and RAM on this laptop
-- Microphone/headset setup
+- Voice latency above the 3 s target (median 4.7 s; LLM is 2.3–7.0 s of it). Planned fix: stream the LLM reply and speak the first sentence early; also test reasoning effort `minimal`
+- ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
+- Re-record the STT benchmark manually (`scripts/benchmark_stt.py record`) for cleaner accuracy numbers; the timed hands-free recording added errors
+
+## 9. Measurements (Phase 2, 2026-09-27)
+
+**Audio setup.** Built-in mic *Microphone (Conexant ISST Audio)*, 16 kHz mono works directly; speech peaks ~0.19–0.30, background ~0.007 (no gain change needed). Default output *Headphones (Conexant ISST Audio)*. Push-to-talk key is **Right Ctrl** (`ctrl_r`): the HP top-row F-keys send action keys unless Fn is held.
+
+**STT benchmark** (`scripts/benchmark_stt.py`, 5 phrases, int8, `language=en`, VAD on; RAM = whole Python process):
+
+| Model | Load | RAM after load | Peak RAM | Avg latency | Max latency | Avg WER |
+|---|---|---|---|---|---|---|
+| tiny.en (beam 1) | 1.0 s | 149 MB | 267 MB | 0.56 s | 0.69 s | 38% |
+| base.en (beam 1) | 1.2 s | 197 MB | 333 MB | 1.00 s | 1.07 s | 36% |
+| **base.en (beam 5)** — chosen | — | — | 334 MB | 1.10 s | 1.43 s | **28%** |
+| small.en (beam 1) | 2.2 s | 382 MB | 993 MB | 3.62 s | 5.69 s | 36% |
+
+WER is inflated by the hands-free recording (all models agree on the same misheard words); it is valid for comparing models. small.en is rejected: ~1 GB RAM and 3.6 s latency.
+
+**Live voice session** (9 turns, `jarvis --voice`, gpt-5-nano with reasoning effort `low`):
+
+| Metric | Result | Target |
+|---|---|---|
+| STT latency | 0.87–1.15 s | — |
+| LLM latency | 2.3–7.0 s (median ~3.6 s) | — |
+| End of speech → reply starts | min 3.3 s, median 4.7 s, max 7.9 s | < 3 s ❌ |
+| Process RAM | 306–309 MB | < 500 MB ✅ |
+| Errors / TTS fallbacks | 0 / 0 | — |
+| LLM tokens (9 turns) | 9,300 total, 2,560 reasoning (≈ $0.004) | — |
+| ElevenLabs premium voice | ~3.5–4.6 s before audio starts | briefing only |
+

@@ -13,6 +13,18 @@ dependencies = [
     "openai>=3.19,<4",
     # python-dotenv: reads .env into config (dotenv_values); standard, well-tested .env parsing.
     "python-dotenv>=1.2,<2",
+    # faster-whisper: local CPU speech-to-text; imported only in src/jarvis/voice/stt/.
+    "faster-whisper>=1.2,<2",
+    # sounddevice: microphone capture and PCM playback (PortAudio).
+    "sounddevice>=0.5,<1",
+    # numpy: audio buffers passed between recorder, STT, and playback.
+    "numpy>=2",
+    # pyttsx3: free local Windows TTS (SAPI5); imported only in src/jarvis/voice/tts/.
+    "pyttsx3>=2.99,<3",
+    # pynput: global push-to-talk hotkey (only the configured key is inspected).
+    "pynput>=1.8,<2",
+    # psutil: process RAM measurement for the STT benchmark and voice-turn metrics.
+    "psutil>=7,<8",
 ]
 
 [project.optional-dependencies]

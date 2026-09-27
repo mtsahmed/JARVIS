@@ -58,13 +58,13 @@ class Config:
         return (self.llm_api_key,)
 
 
-def _read_values(env_path: Path) -> dict[str, str]:
+def _read_values(env_path: Path, keys: tuple[str, ...] = _KEYS) -> dict[str, str]:
     values: dict[str, str] = {}
     if env_path.is_file():
         for key, value in dotenv_values(env_path).items():
-            if key in _KEYS and value is not None:
+            if key in keys and value is not None:
                 values[key] = value
-    for key in _KEYS:
+    for key in keys:
         if key in os.environ:
             values[key] = os.environ[key]
     return {k: v.strip() for k, v in values.items() if v.strip()}
@@ -112,4 +112,107 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         logs_dir=project_root / "logs",
         reasoning_effort=reasoning_effort,
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
+    )
+
+
+# --- Voice (Phase 2). Loaded only in voice mode, so text mode needs only the keys above. ---
+
+_VOICE_KEYS = (
+    "JARVIS_DATA_DIR",
+    "JARVIS_STT_PROVIDER",
+    "JARVIS_STT_MODEL",
+    "JARVIS_STT_COMPUTE_TYPE",
+    "JARVIS_STT_BEAM_SIZE",
+    "JARVIS_TTS_PROVIDER",
+    "JARVIS_TTS_RATE",
+    "JARVIS_PTT_KEY",
+    "JARVIS_MAX_RECORD_SECONDS",
+    "ELEVENLABS_API_KEY",
+    "JARVIS_ELEVENLABS_VOICE_ID",
+    "JARVIS_ELEVENLABS_MODEL",
+    "JARVIS_ELEVENLABS_USE_FOR",
+    "JARVIS_ELEVENLABS_MIN_CHARS",
+)
+
+_STT_PROVIDERS = ("faster-whisper",)
+_TTS_PROVIDERS = ("sapi",)
+# What ElevenLabs may be used for; everything else uses the local voice.
+_ELEVENLABS_PURPOSES = ("briefing", "reply")
+
+
+@dataclass(frozen=True)
+class VoiceConfig:
+    data_dir: Path
+    models_dir: Path
+    stt_provider: str
+    stt_model: str
+    stt_compute_type: str
+    stt_beam_size: int
+    tts_provider: str
+    tts_rate: int | None  # None = SAPI default speed
+    ptt_key: str
+    max_record_seconds: float
+    elevenlabs_use_for: frozenset[str]  # empty = ElevenLabs disabled
+    elevenlabs_voice_id: str | None
+    elevenlabs_model: str | None
+    elevenlabs_min_chars: int
+    elevenlabs_api_key: str | None = field(default=None, repr=False)
+
+    @property
+    def secrets(self) -> tuple[str, ...]:
+        return (self.elevenlabs_api_key,) if self.elevenlabs_api_key else ()
+
+
+def _choice(values: dict[str, str], key: str, env_path: Path, allowed: tuple[str, ...]) -> str:
+    value = _require(values, key, env_path).lower()
+    if value not in allowed:
+        raise ConfigError(f"{key} must be one of: {', '.join(allowed)}; got {value!r}.")
+    return value
+
+
+def load_voice_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> VoiceConfig:
+    """Build a validated VoiceConfig. Raises ConfigError with a clear message on problems."""
+    env_path = env_path or project_root / ".env"
+    values = _read_values(env_path, _VOICE_KEYS)
+
+    data_dir = Path(values.get("JARVIS_DATA_DIR", "data"))
+    if not data_dir.is_absolute():
+        data_dir = project_root / data_dir
+
+    tts_rate = None
+    if "JARVIS_TTS_RATE" in values:
+        tts_rate = int(_positive_number(values, "JARVIS_TTS_RATE", env_path, int))
+
+    use_for = frozenset(p.strip().lower() for p in values.get("JARVIS_ELEVENLABS_USE_FOR", "").split(",") if p.strip())
+    unknown = use_for - set(_ELEVENLABS_PURPOSES)
+    if unknown:
+        allowed = ", ".join(_ELEVENLABS_PURPOSES)
+        raise ConfigError(f"JARVIS_ELEVENLABS_USE_FOR allows: {allowed}; got {', '.join(sorted(unknown))}.")
+
+    # ElevenLabs settings are read when present, but required only when it is enabled.
+    elevenlabs_keys = ("ELEVENLABS_API_KEY", "JARVIS_ELEVENLABS_VOICE_ID", "JARVIS_ELEVENLABS_MODEL")
+    if use_for:
+        for key in (*elevenlabs_keys, "JARVIS_ELEVENLABS_MIN_CHARS"):
+            _require(values, key, env_path)
+    api_key, voice_id, el_model = (values.get(key) for key in elevenlabs_keys)
+    min_chars = 0
+    if "JARVIS_ELEVENLABS_MIN_CHARS" in values:
+        min_chars = int(_positive_number(values, "JARVIS_ELEVENLABS_MIN_CHARS", env_path, int))
+
+    return VoiceConfig(
+        data_dir=data_dir,
+        models_dir=data_dir / "models",
+        stt_provider=_choice(values, "JARVIS_STT_PROVIDER", env_path, _STT_PROVIDERS),
+        stt_model=_require(values, "JARVIS_STT_MODEL", env_path),
+        stt_compute_type=_require(values, "JARVIS_STT_COMPUTE_TYPE", env_path),
+        stt_beam_size=int(_positive_number(values, "JARVIS_STT_BEAM_SIZE", env_path, int)),
+        tts_provider=_choice(values, "JARVIS_TTS_PROVIDER", env_path, _TTS_PROVIDERS),
+        tts_rate=tts_rate,
+        ptt_key=_require(values, "JARVIS_PTT_KEY", env_path).lower(),
+        max_record_seconds=float(_positive_number(values, "JARVIS_MAX_RECORD_SECONDS", env_path, float)),
+        elevenlabs_use_for=use_for,
+        elevenlabs_voice_id=voice_id,
+        elevenlabs_model=el_model,
+        elevenlabs_min_chars=min_chars,
+        elevenlabs_api_key=api_key,
     )
