@@ -40,7 +40,7 @@ class FakeLLM:
     def model(self) -> str:
         return "fake-llm"
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None) -> LLMReply:
+    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None, tools=(), run_tool=None) -> LLMReply:
         self.calls += 1
         if self._fail:
             raise LLMError("llm down")
@@ -136,7 +136,7 @@ def test_first_sentence_spoken_before_reply_finishes() -> None:
     events: list[str] = []
 
     class SlowLLM(FakeLLM):
-        def generate(self, messages, instructions=None, on_text=None):  # type: ignore[no-untyped-def]
+        def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
             on_text("First sentence here. ")
             time.sleep(0.3)  # rest of the reply still "generating"
             events.append("llm finished")
@@ -217,3 +217,85 @@ def test_voice_instructions_cover_live_data() -> None:
     from jarvis.voice.loop import VOICE_INSTRUCTIONS
 
     assert "cannot look up live" in VOICE_INSTRUCTIONS
+
+
+# --- voice confirmation (CONFIRM tier) -------------------------------------------------------------
+
+
+class FakeRecorder:
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> np.ndarray:
+        return ONE_SECOND
+
+
+class ConfirmingLLM(FakeLLM):
+    """Calls a CONFIRM tool through run_tool, then answers with the tool result."""
+
+    def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
+        result = run_tool("open_file", '{"path": "budget.xlsx"}')
+        on_text(f"Result: {result} ")
+        return LLMReply(text=result, model="fake", usage=None, tool_calls=1)
+
+
+def make_confirming(answer_text: str, key_events: list[str]):  # type: ignore[no-untyped-def]
+    from jarvis.tools.base import Tier, Tool
+    from jarvis.tools.registry import ToolRegistry
+
+    opened: list[str] = []
+    schema = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
+              "additionalProperties": False}
+    registry = ToolRegistry([Tool("open_file", "Open a file", schema, Tier.CONFIRM,
+                                  handler=lambda a: opened.append(a["path"]) or "opened",
+                                  describe=lambda a: f"Open {a['path']}?")], audit_sink=lambda r: None)
+    events: queue.Queue[str] = queue.Queue()
+    speaker = FakeSpeaker()
+    stt = FakeSTT("open my budget")
+    session = ChatSession(ConfirmingLLM(), history_turns=5, usage_sink=lambda r: None, tools=registry)
+    loop = VoiceLoop(session, stt, speaker, FakeRecorder(), events, drain=lambda: None, max_record_seconds=5,
+                     usage_sink=lambda r: None)
+
+    original = stt.transcribe
+
+    def transcribe(samples: np.ndarray) -> Transcript:
+        # first call = the request; later calls = the spoken answer to the confirmation
+        stt._text = answer_text if stt.calls >= 1 else "open my budget"
+        return original(samples)
+
+    stt.transcribe = transcribe  # type: ignore[method-assign]
+    for event in key_events:
+        events.put(event)
+    return loop, speaker, opened
+
+
+def test_spoken_yes_runs_confirm_action() -> None:
+    loop, speaker, opened = make_confirming("Yes.", ["start", "stop"])
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert opened == ["budget.xlsx"]
+    assert speaker.spoken[0] == "Open budget.xlsx? Say yes to confirm."
+    assert "Okay." in speaker.spoken
+
+
+def test_spoken_no_declines() -> None:
+    loop, speaker, opened = make_confirming("No, don't.", ["start", "stop"])
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert opened == []
+    assert "Okay, I won't." in speaker.spoken
+
+
+def test_no_answer_declines(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import jarvis.voice.loop as loop_module
+
+    monkeypatch.setattr(loop_module, "CONFIRM_WAIT_SECONDS", 0.3)
+    loop, speaker, opened = make_confirming("Yes.", [])  # key never pressed
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert opened == []
+    assert "Okay, I won't." in speaker.spoken
+
+
+def test_is_yes_only_for_clear_yes() -> None:
+    from jarvis.voice.loop import is_yes
+
+    assert is_yes("Yes.") and is_yes("Go ahead") and is_yes("Yeah sure")
+    assert not is_yes("") and not is_yes("okay") and not is_yes("Yes, no wait") and not is_yes("I'm not sure")

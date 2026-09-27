@@ -10,9 +10,12 @@ import openai
 from openai import OpenAI
 from openai.types.responses import Response, ResponseUsage
 
-from jarvis.llm.base import LLMError, LLMReply, Message, Usage
+from jarvis.llm.base import LLMError, LLMReply, Message, ToolRunner, ToolSpec, Usage
 
 logger = logging.getLogger(__name__)
+
+# Tool-call rounds per reply; the last round forbids tools so the model must answer.
+MAX_TOOL_ROUNDS = 4
 
 
 class OpenAIAdapter:
@@ -40,21 +43,42 @@ class OpenAIAdapter:
         messages: Sequence[Message],
         instructions: str | None = None,
         on_text: Callable[[str], None] | None = None,
+        tools: Sequence[ToolSpec] = (),
+        run_tool: ToolRunner | None = None,
     ) -> LLMReply:
-        request: dict[str, Any] = {
+        base: dict[str, Any] = {
             "model": self._model,
             "instructions": instructions,
-            "input": [{"role": m.role, "content": m.content} for m in messages],
             "max_output_tokens": self._max_output_tokens,
             "store": False,  # do not keep conversations on OpenAI's servers
         }
         if self._reasoning_effort is not None:
-            request["reasoning"] = {"effort": self._reasoning_effort}
+            base["reasoning"] = {"effort": self._reasoning_effort}
+        use_tools = bool(tools) and run_tool is not None
+        if use_tools:
+            base["tools"] = [_to_openai_tool(t) for t in tools]
+            # With store=False, reasoning items must be sent back (encrypted) alongside tool results.
+            base["include"] = ["reasoning.encrypted_content"]
+
+        items: list[Any] = [{"role": m.role, "content": m.content} for m in messages]
+        usages: list[ResponseUsage | None] = []
+        tool_calls = 0
         try:
-            if on_text is None:
-                response = self._client.responses.create(**request)
-            else:
-                response = self._stream(request, on_text)
+            for round_number in range(MAX_TOOL_ROUNDS + 1):
+                request = {**base, "input": items}
+                if use_tools and round_number == MAX_TOOL_ROUNDS:
+                    request["tool_choice"] = "none"  # enough tool calls: answer now
+                response = self._client.responses.create(**request) if on_text is None else self._stream(request, on_text)
+                usages.append(response.usage)
+                calls = [item for item in response.output if item.type == "function_call"]
+                if not (use_tools and calls and response.status == "completed"):
+                    break
+                # Function-calling guide: pass back the model's output items (reasoning + calls), then the results.
+                items += response.output
+                for call in calls:
+                    tool_calls += 1
+                    items.append({"type": "function_call_output", "call_id": call.call_id,
+                                  "output": run_tool(call.name, call.arguments)})
         # Provider error text is not passed on (it can echo parts of the key); "from None" drops it from tracebacks.
         except openai.APITimeoutError:
             logger.warning("OpenAI request timed out after %ss", self._timeout_seconds)
@@ -89,8 +113,9 @@ class OpenAIAdapter:
         return LLMReply(
             text=response.output_text,
             model=response.model,
-            usage=_to_usage(response.usage),
+            usage=_sum_usage(usages),
             incomplete_reason=incomplete_reason,
+            tool_calls=tool_calls,
         )
 
 
@@ -107,6 +132,21 @@ class OpenAIAdapter:
                     raise LLMError(f"OpenAI stopped the reply ({event.code or 'stream error'}).")
         logger.error("OpenAI stream ended without a final response")
         raise LLMError("OpenAI's reply ended unexpectedly. Try again.")
+
+
+def _to_openai_tool(tool: ToolSpec) -> dict[str, Any]:
+    # strict=True: the model's arguments always match the schema (all fields required, no extras).
+    return {"type": "function", "name": tool.name, "description": tool.description,
+            "parameters": tool.parameters, "strict": True}
+
+
+def _sum_usage(usages: Sequence[ResponseUsage | None]) -> Usage | None:
+    """Total usage over all tool-call rounds of one reply."""
+    parts = [u for u in (_to_usage(x) for x in usages) if u is not None]
+    if not parts:
+        return None
+    return Usage(*(sum(getattr(p, f) for p in parts) for f in
+                   ("input_tokens", "output_tokens", "total_tokens", "cached_tokens", "reasoning_tokens")))
 
 
 def _to_usage(usage: ResponseUsage | None) -> Usage | None:

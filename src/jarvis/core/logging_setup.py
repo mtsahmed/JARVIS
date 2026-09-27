@@ -2,6 +2,7 @@
 
 - logs/jarvis.log   : application log (rotating)
 - logs/usage.jsonl  : one JSON object per provider request (tokens, latency, ...)
+- logs/audit.jsonl  : one JSON object per tool call (tool, arguments, decision, status)
 
 Known secret values are redacted from every record before it is written.
 """
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 USAGE_LOGGER_NAME = "jarvis.usage"
+AUDIT_LOGGER_NAME = "jarvis.audit"
 _MAX_BYTES = 1_000_000
 _BACKUP_COUNT = 3
 _REDACTED = "[REDACTED]"
@@ -59,16 +61,26 @@ def setup_logging(logs_dir: Path, secrets: Iterable[str] = (), level: int = logg
         _file_handler(logs_dir / "jarvis.log", "%(asctime)s %(levelname)s %(name)s: %(message)s", secrets)
     )
 
-    usage = logging.getLogger(USAGE_LOGGER_NAME)
-    for handler in list(usage.handlers):
-        usage.removeHandler(handler)
-        handler.close()
-    usage.setLevel(logging.INFO)
-    usage.propagate = False  # usage records go only to usage.jsonl
-    usage.addHandler(_file_handler(logs_dir / "usage.jsonl", "%(message)s", secrets))
+    for name, filename in ((USAGE_LOGGER_NAME, "usage.jsonl"), (AUDIT_LOGGER_NAME, "audit.jsonl")):
+        jsonl = logging.getLogger(name)
+        for handler in list(jsonl.handlers):
+            jsonl.removeHandler(handler)
+            handler.close()
+        jsonl.setLevel(logging.INFO)
+        jsonl.propagate = False  # these records go only to their own .jsonl file
+        jsonl.addHandler(_file_handler(logs_dir / filename, "%(message)s", secrets))
+
+
+def _log_jsonl(logger_name: str, record: dict[str, Any]) -> None:
+    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), **record}
+    logging.getLogger(logger_name).info(json.dumps(entry, ensure_ascii=False))
 
 
 def log_usage(record: dict[str, Any]) -> None:
     """Append one usage record (with a UTC timestamp) to logs/usage.jsonl."""
-    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), **record}
-    logging.getLogger(USAGE_LOGGER_NAME).info(json.dumps(entry, ensure_ascii=False))
+    _log_jsonl(USAGE_LOGGER_NAME, record)
+
+
+def log_audit(record: dict[str, Any]) -> None:
+    """Append one tool-call record (with a UTC timestamp) to logs/audit.jsonl."""
+    _log_jsonl(AUDIT_LOGGER_NAME, record)

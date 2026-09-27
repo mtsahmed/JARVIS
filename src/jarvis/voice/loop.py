@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import numpy as np
@@ -34,7 +35,9 @@ VOICE_INSTRUCTIONS = (
     "If a full answer would be long, give the key point and offer to say more. "
     "You cannot look up live or recent information yet. For prices, market values, news, or other facts "
     "that change over time, say that briefly, then give the most recent information you know and roughly "
-    "when it is from, and suggest checking a live source."
+    "when it is from, and suggest checking a live source. "
+    "When an action needs the user's approval, just call the tool: Jarvis asks the user itself, "
+    "so never ask for confirmation in your reply."
 )
 
 # Saying one of these (and nothing else) starts a new conversation, like /reset in text mode.
@@ -46,6 +49,34 @@ _FILLER_WORDS = frozenset({"okay", "ok", "all", "right", "alright", "yeah", "yes
                            "mm", "oh", "ah", "so", "well", "like", "you", "know"})
 _MIN_FILLER_RUN = 4
 _POLL_SECONDS = 0.2  # queue waits time out regularly so Ctrl+C works on Windows
+
+# Spoken approval for CONFIRM-tier actions. Anything else, including silence, means no.
+CONFIRM_WAIT_SECONDS = 10.0
+_YES_WORDS = frozenset({"yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "correct", "affirmative"})
+_YES_PHRASES = ("go ahead", "do it")
+_NO_WORDS = frozenset({"no", "not", "don't", "dont", "cancel", "stop", "wait", "never", "nope"})
+
+
+@dataclass
+class ConfirmRequest:
+    """Sent from the LLM worker thread to the main thread, which asks the user by voice."""
+
+    question: str
+    done: threading.Event = field(default_factory=threading.Event)
+    approved: bool = False
+
+
+class _QueueConfirmer:
+    """Confirmer used on the worker thread: hands the question to the main thread and waits."""
+
+    def __init__(self, items: queue.Queue[Any]) -> None:
+        self._items = items
+
+    def confirm(self, question: str) -> bool:
+        request = ConfirmRequest(question)
+        self._items.put(request)
+        request.done.wait()
+        return request.approved
 
 
 class RecorderLike(Protocol):
@@ -144,7 +175,7 @@ class VoiceLoop:
 
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
         # is complete, so Jarvis starts talking while the rest of the reply is still being written.
-        sentences: queue.Queue[str | None] = queue.Queue()
+        sentences: queue.Queue[str | ConfirmRequest | None] = queue.Queue()
         outcome: dict[str, Any] = {}
         worker = threading.Thread(target=self._stream_reply, args=(transcript.text, sentences, outcome), daemon=True)
         worker.start()
@@ -152,6 +183,14 @@ class VoiceLoop:
         until_speak_ms: int | None = None
         spoken = 0
         while (raw := self._next_sentence(sentences)) is not None:
+            if isinstance(raw, ConfirmRequest):
+                if spoken:
+                    print()
+                try:
+                    raw.approved = self._confirm_by_voice(raw.question)
+                finally:
+                    raw.done.set()  # never leave the worker waiting
+                continue
             if not (sentence := speakable(raw)):
                 continue  # nothing left to say once markdown is removed
             if until_speak_ms is None:
@@ -186,12 +225,32 @@ class VoiceLoop:
             "rss_mb": round(psutil.Process().memory_info().rss / 1_048_576),
         })
 
-    def _stream_reply(self, text: str, sentences: queue.Queue[str | None], outcome: dict[str, Any]) -> None:
+    def _confirm_by_voice(self, question: str) -> bool:
+        """Main thread: read the action back, then listen for an explicit spoken yes."""
+        print(f"jarvis> {question} (hold the key and say yes to confirm)")
+        self._say(f"{question} Say yes to confirm.")
+        self._drain()  # ignore key presses made while the question was being read out
+        approved = False
+        if self._next_event(timeout=CONFIRM_WAIT_SECONDS) == "start" and (samples := self._record()) is not None:
+            try:
+                answer = self._stt.transcribe(samples).text
+            except STTError as e:
+                print(f"[error] {e}")
+                answer = ""
+            print(f"you said> {answer or '(nothing)'}")
+            approved = is_yes(answer)
+        else:
+            print("(no answer)")
+        self._say("Okay." if approved else "Okay, I won't.")
+        return approved
+
+    def _stream_reply(self, text: str, sentences: queue.Queue[str | ConfirmRequest | None], outcome: dict[str, Any]) -> None:
         """Worker thread: stream the LLM reply and queue complete sentences. Always ends with None."""
         splitter = SentenceSplitter()
         started = time.perf_counter()
         try:
-            self._session.ask(text, on_text=lambda piece: [sentences.put(s) for s in splitter.feed(piece)])
+            self._session.ask(text, on_text=lambda piece: [sentences.put(s) for s in splitter.feed(piece)],
+                              confirmer=_QueueConfirmer(sentences))
             if rest := splitter.flush():
                 sentences.put(rest)
         except Exception as e:  # handed to the main thread
@@ -201,7 +260,7 @@ class VoiceLoop:
             sentences.put(None)
 
     @staticmethod
-    def _next_sentence(sentences: queue.Queue[str | None]) -> str | None:
+    def _next_sentence(sentences: queue.Queue[str | ConfirmRequest | None]) -> str | ConfirmRequest | None:
         while True:
             try:
                 return sentences.get(timeout=_POLL_SECONDS)  # timeout keeps Ctrl+C responsive on Windows
@@ -222,6 +281,15 @@ def _words(text: str) -> list[str]:
 def is_filler_only(text: str) -> bool:
     words = _words(text)
     return len(words) >= _MIN_FILLER_RUN and all(w in _FILLER_WORDS for w in words)
+
+
+def is_yes(text: str) -> bool:
+    """An explicit yes with no negation. Anything unclear counts as no."""
+    words = _words(text)
+    if not words or any(w in _NO_WORDS for w in words):
+        return False
+    joined = " ".join(words)
+    return words[0] in _YES_WORDS or any(joined.startswith(p) for p in _YES_PHRASES)
 
 
 def is_reset_request(text: str) -> bool:

@@ -11,10 +11,28 @@ from jarvis.core.config import Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
 from jarvis.llm.base import LLMAdapter, LLMError
 from jarvis.llm.factory import create_llm
+from jarvis.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 HELP = "Commands: /reset clears history, /exit quits."
+
+
+class TextConfirmer:
+    """Asks in the terminal before a CONFIRM-tier action. Only y/yes approves; anything else is no."""
+
+    def confirm(self, question: str) -> bool:
+        try:
+            answer = input(f"jarvis> {question} [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in ("y", "yes")
+
+
+def build_tools() -> ToolRegistry:
+    """All tools Jarvis may use. Each declares its permission tier."""
+    return ToolRegistry([])
 
 
 def main() -> int:
@@ -39,7 +57,7 @@ def main() -> int:
     if args.voice and run_voice(config, llm):
         logger.info("Jarvis stopped")
         return 0
-    run_text(config, ChatSession(llm, history_turns=config.history_turns))
+    run_text(config, ChatSession(llm, history_turns=config.history_turns, tools=build_tools()))
     logger.info("Jarvis stopped")
     return 0
 
@@ -68,7 +86,8 @@ def run_voice(config: Config, llm: LLMAdapter) -> bool:
         logger.warning("Voice mode unavailable: %s", e)
         return False
 
-    session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS)
+    session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS,
+                          tools=build_tools())
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
                      hotkey.drain, voice.max_record_seconds)
     hotkey.start()
@@ -104,7 +123,7 @@ def run_text(config: Config, session: ChatSession) -> None:
             continue
 
         try:
-            reply = session.ask(text)
+            reply = session.ask(text, confirmer=TextConfirmer())
         except LLMError as e:
             print(f"[error] {e}")
             continue

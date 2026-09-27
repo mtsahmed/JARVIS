@@ -19,7 +19,7 @@ class FakeLLM:
     def model(self) -> str:
         return "fake-model"
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None) -> LLMReply:
+    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None, tools=(), run_tool=None) -> LLMReply:
         self.calls.append(list(messages))
         if self._fail:
             raise LLMError("provider down")
@@ -96,7 +96,7 @@ def test_on_text_passed_through_to_llm() -> None:
     received: list[Any] = []
 
     class StreamingLLM(FakeLLM):
-        def generate(self, messages, instructions=None, on_text=None):  # type: ignore[no-untyped-def]
+        def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
             received.append(on_text)
             return super().generate(messages, instructions)
 
@@ -104,3 +104,44 @@ def test_on_text_passed_through_to_llm() -> None:
     callback = print
     session.ask("hi", on_text=callback)
     assert received == [callback]
+
+
+def test_current_time_added_to_instructions() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    seen: list[str] = []
+
+    class Capture(FakeLLM):
+        def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
+            seen.append(instructions)
+            return super().generate(messages, instructions)
+
+    fixed = datetime(2026, 9, 27, 18, 30, tzinfo=timezone(timedelta(hours=3)))
+    session = ChatSession(Capture(), history_turns=5, usage_sink=lambda r: None, clock=lambda: fixed)
+    session.ask("hi")
+    assert "Current local date and time: Sunday, 27 September 2026, 18:30 (UTC+0300)." in seen[0]
+
+
+def test_tools_and_confirmer_reach_the_registry() -> None:
+    from jarvis.tools.base import Tier, Tool
+    from jarvis.tools.registry import ToolRegistry
+
+    schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
+    opened: list[str] = []
+    registry = ToolRegistry([Tool("open_it", "Open it", schema, Tier.CONFIRM, handler=lambda a: opened.append("x") or "opened",
+                                  describe=lambda a: "Open it?")], audit_sink=lambda r: None)
+
+    class CallsTool(FakeLLM):
+        def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
+            assert [t.name for t in tools] == ["open_it"]
+            result = run_tool("open_it", "{}")
+            return LLMReply(text=result, model="fake", usage=None, tool_calls=1)
+
+    class Yes:
+        def confirm(self, question: str) -> bool:
+            return True
+
+    records: list[dict[str, Any]] = []
+    session = ChatSession(CallsTool(), history_turns=5, usage_sink=records.append, tools=registry)
+    assert session.ask("open it", confirmer=Yes()).text == "opened"
+    assert opened == ["x"] and records[0]["tool_calls"] == 1
