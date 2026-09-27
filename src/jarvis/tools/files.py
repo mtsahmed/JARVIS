@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from jarvis.tools.base import Tier, Tool, ToolError
-from jarvis.tools.file_text import READABLE_EXTENSIONS, extract_text
+from jarvis.tools.file_text import EXTRACTOR_VERSION, READABLE_EXTENSIONS, extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,12 @@ class FileIndex:
             self._db.execute("CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, name TEXT, "
                              "size INTEGER, mtime REAL)")
             self._db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(path UNINDEXED, name, content)")
+            # Text extraction improved since this index was built: forget everything so the next refresh
+            # re-reads every file (a refresh otherwise skips unchanged files).
+            if self._db.execute("PRAGMA user_version").fetchone()[0] < EXTRACTOR_VERSION:
+                self._db.execute("DELETE FROM files")
+                self._db.execute("DELETE FROM files_fts")
+                self._db.execute(f"PRAGMA user_version = {int(EXTRACTOR_VERSION)}")
         self._purge_disallowed()
 
     def _purge_disallowed(self) -> None:
@@ -225,7 +231,7 @@ def file_tools(index: FileIndex) -> list[Tool]:
     def read_file(args: dict[str, Any]) -> str:
         path = Path(str(args["path"]))
         if path.suffix.lower() not in READABLE_EXTENSIONS:
-            raise ToolError(f"I can only read .txt, .md, .csv and .pdf files, not {path.suffix or 'this type'}.")
+            raise ToolError(f"I can only read .txt, .md, .csv, .pdf and .epub files, not {path.suffix or 'this type'}.")
         text = extract_text(path)
         if not text or not text.strip():
             raise ToolError(f"{path.name} has no readable text (it may be a scanned PDF).")
@@ -237,7 +243,7 @@ def file_tools(index: FileIndex) -> list[Tool]:
     return [
         Tool(
             "search_files",
-            "Search the user's approved folders by file name and by the text inside .txt, .md, .csv and .pdf "
+            "Search the user's approved folders by file name and by the text inside .txt, .md, .csv, .pdf and .epub "
             "files. Returns names, folders, dates and full paths, never file contents. The paths are only for "
             "open_file and read_file: tell the user the file name and folder, never the full path. "
             "Do not open or read a found file unless the user asks for that.",
@@ -258,7 +264,7 @@ def file_tools(index: FileIndex) -> list[Tool]:
         ),
         Tool(
             "read_file",
-            "Read the text of a .txt, .md, .csv or .pdf file found by search_files, to answer the user's "
+            "Read the text of a .txt, .md, .csv, .pdf or .epub file found by search_files, to answer the user's "
             "question about its contents. Only use when the user asks about what a file says.",
             {"type": "object",
              "properties": {"path": path_schema,
