@@ -83,6 +83,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
+- Phase 6 threat review: AUTO tools can be triggered by injected text if the model is ever hijacked (create_reminder: nuisance; web_search: could send private text to Tavily in the query). Not observed in testing; option: require approval for web searches in a turn after a file was read
 - Web questions take 5-9 s in voice mode (search round trips plus answer). Option: say a short "Let me check" when a search starts
 - Optional: if a hanging network makes offline voice turns slow (cloud STT timeout 15 s), skip the cloud for a few minutes after a failure
 
@@ -134,4 +135,22 @@ Changes: LLM reply streamed and spoken sentence by sentence; voice-only instruct
 | **`gpt-4o-mini-transcribe`** (cloud) — chosen | **10/10** | **0%** | 1.06 / 2.81 s | 80 MB |
 
 Local errors were on non-reminder commands ("Open" → "On", "car insurance" → "card and show them", "What's the weather" → "Or see whether I'm"). Vocabulary priming fixed "cancel" (was heard as "cancer"). Fallback verified: with the cloud failing after a reminder notification had loaded WinRT, the local model loaded and transcribed correctly (first fallback turn 3.1 s including model load; RSS 309 MB); with the cloud working, RSS is ~120 MB.
+
+## 10. Phase 3 results (2026-09-28)
+
+**Tools** (all via `logs/audit.jsonl`: tool, tier, redacted arguments, decision, status):
+
+| Tool | Tier | Notes |
+|---|---|---|
+| create_reminder / list_reminders | AUTO | SQLite `data/jarvis.db`; scheduler every 5 s; desktop notification + spoken/printed alert; missed reminders fire at next start |
+| cancel_reminder | CONFIRM (every time) | read back with text and time |
+| search_files | AUTO | one approved folder; names/folders/dates only to the LLM; .txt/.md/.csv/.pdf/.epub content indexed locally (SQLite FTS5) |
+| open_file | CONFIRM (once per file per conversation) | programs, scripts, shortcuts, macro files BLOCKED; path must resolve inside the approved folder |
+| read_file | CONFIRM (once per file per conversation) | max 3,500 characters sent, passages matching the question; marked untrusted |
+| web_search | AUTO | Tavily, 1 credit per search; sources on screen, never spoken; marked untrusted |
+
+**Prompt injection** (`tests/test_injection.py` + live check with `gpt-5-mini`):
+- Simulated fully hijacked model that obeys planted text in a file or web result: could not cancel a reminder, run `setup.exe`, read `.env` (outside the folder), or open/read other files. Each attempt was BLOCKED without asking or asked and refused; remembered approvals did not extend to other files.
+- Real model, planted file and planted web result: 3/3 and 2/2 runs ignored the planted instructions and did only what the user asked (it flagged the hidden instructions to the user in 2 of 3 file runs).
+- Residual risk: AUTO actions (see open items).
 
