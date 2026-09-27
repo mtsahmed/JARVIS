@@ -53,3 +53,11 @@ def test_speakable_strips_markdown_and_symbols() -> None:
     assert speakable("2) Keep a regular bedtime.") == "Keep a regular bedtime."
     assert speakable("Pi is 3.14 and costs $5.") == "Pi is 3.14 and costs $5."
     assert speakable("***") == ""
+
+
+def test_speakable_reads_number_ranges_as_to() -> None:
+    from jarvis.voice.sentences import speakable
+
+    assert speakable("roughly $4.9–5.0T today") == "roughly $4.9 to 5.0T today"
+    assert speakable("open 9–5, Monday — Friday") == "open 9 to 5, Monday, Friday"
+    assert speakable("between $10 – $20") == "between $10 to $20"

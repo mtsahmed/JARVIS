@@ -19,6 +19,7 @@ from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
 from jarvis.voice.sentences import SentenceSplitter, speakable
+from jarvis.tools.web_search import Sources, format_sources
 from jarvis.voice.stt.base import STTAdapter, STTError
 from jarvis.voice.tts.base import TTSError
 
@@ -33,9 +34,10 @@ VOICE_INSTRUCTIONS = (
     "Never use lists, bullet points, headings, markdown, emojis, URLs, or special symbols. "
     "If the request is unclear, ask one short question. "
     "If a full answer would be long, give the key point and offer to say more. "
-    "You cannot look up live or recent information yet. For prices, market values, news, or other facts "
-    "that change over time, say that briefly, then give the most recent information you know and roughly "
-    "when it is from, and suggest checking a live source. "
+    "For prices, market values, news, weather, or other facts that change over time, use the web_search tool "
+    "and answer from its results in your own words; never read out web addresses, since sources are shown on "
+    "screen. If web search is not available or fails, say you cannot look it up live right now, then give the "
+    "most recent information you know and roughly when it is from. "
     "When an action needs the user's approval, just call the tool: Jarvis asks the user itself, "
     "so never ask for confirmation in your reply."
 )
@@ -100,7 +102,9 @@ class VoiceLoop:
         max_record_seconds: float,
         usage_sink: Callable[[dict[str, Any]], None] = log_usage,
         alerts: queue.Queue[str] | None = None,
+        sources: Sources | None = None,
     ) -> None:
+        self._sources = sources  # web search sources: shown on screen after the answer, never spoken
         self._alerts = alerts  # e.g. due reminders; spoken only while Jarvis is idle
         self._session = session
         self._stt = stt
@@ -219,6 +223,8 @@ class VoiceLoop:
         if spoken:
             print()
         worker.join()
+        if self._sources is not None and (found := self._sources.take()):
+            print(format_sources(found))
 
         if "error" in outcome:
             error = outcome["error"]

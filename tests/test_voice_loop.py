@@ -216,7 +216,9 @@ def test_reset_word_inside_a_request_is_not_a_reset() -> None:
 def test_voice_instructions_cover_live_data() -> None:
     from jarvis.voice.loop import VOICE_INSTRUCTIONS
 
-    assert "cannot look up live" in VOICE_INSTRUCTIONS
+    assert "use the web_search tool" in VOICE_INSTRUCTIONS
+    assert "cannot look it up live" in VOICE_INSTRUCTIONS  # honest fallback when search is off or fails
+    assert "never read out web addresses" in VOICE_INSTRUCTIONS
 
 
 # --- voice confirmation (CONFIRM tier) -------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import dataclass
 import queue
 import sys
 import threading
@@ -16,6 +17,9 @@ from jarvis.llm.base import LLMAdapter, LLMError
 from jarvis.llm.factory import create_llm
 from jarvis.tools.files import FileIndex, file_tools
 from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.search.base import SearchAdapter, SearchError
+from jarvis.tools.search.factory import create_search
+from jarvis.tools.web_search import Sources, format_sources, web_search_tool
 from jarvis.tools.reminders import Reminder, ReminderStore, describe_when, local_now, reminder_tools
 
 logger = logging.getLogger(__name__)
@@ -35,9 +39,32 @@ class TextConfirmer:
         return answer in ("y", "yes")
 
 
-def build_tools(store: ReminderStore, files: FileIndex | None) -> ToolRegistry:
-    """All tools Jarvis may use. Each declares its permission tier."""
-    return ToolRegistry([*reminder_tools(store), *(file_tools(files) if files else [])])
+@dataclass
+class Services:
+    """Everything the tools need, created once at startup."""
+
+    store: ReminderStore
+    files: FileIndex | None
+    search: SearchAdapter | None
+    sources: Sources  # web sources of the latest answer, shown on screen
+
+    def build_tools(self) -> ToolRegistry:
+        """All tools Jarvis may use. Each declares its permission tier."""
+        tools = [*reminder_tools(self.store), *(file_tools(self.files) if self.files else [])]
+        if self.search is not None:
+            tools.append(web_search_tool(self.search, self.sources))
+        return ToolRegistry(tools)
+
+
+def start_search(config: Config) -> SearchAdapter | None:
+    if not config.search_provider:
+        return None
+    try:
+        return create_search(config.search_provider, config.search_api_key)
+    except SearchError as e:
+        print(f"Web search unavailable: {e}")
+        logger.warning("Web search unavailable: %s", e)
+        return None
 
 
 def start_file_index(config: Config) -> FileIndex | None:
@@ -99,22 +126,23 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    store = ReminderStore(config.data_dir / "jarvis.db")
-    files = start_file_index(config)
+    services = Services(ReminderStore(config.data_dir / "jarvis.db"), start_file_index(config), start_search(config),
+                        Sources())
     alerts = ReminderAlerts()
-    scheduler = ReminderScheduler(store, alerts)
+    scheduler = ReminderScheduler(services.store, alerts)
     try:
-        if not (args.voice and run_voice(config, llm, store, files, alerts, scheduler)):
+        if not (args.voice and run_voice(config, llm, services, alerts, scheduler)):
             scheduler.start()
-            run_text(config, ChatSession(llm, history_turns=config.history_turns, tools=build_tools(store, files)))
+            session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools())
+            run_text(config, session, services.sources)
     finally:
         scheduler.stop()
     logger.info("Jarvis stopped")
     return 0
 
 
-def run_voice(config: Config, llm: LLMAdapter, store: ReminderStore, files: FileIndex | None,
-              alerts: ReminderAlerts, scheduler: ReminderScheduler) -> bool:
+def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
+              scheduler: ReminderScheduler) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -143,10 +171,11 @@ def run_voice(config: Config, llm: LLMAdapter, store: ReminderStore, files: File
         return False
 
     session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS,
-                          tools=build_tools(store, files))
+                          tools=services.build_tools())
     alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
-                     hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue)
+                     hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue,
+                     sources=services.sources)
     hotkey.start()
     scheduler.start()
     print(f"Jarvis voice mode ({config.llm_model}, {voice.stt_model}). "
@@ -160,7 +189,7 @@ def run_voice(config: Config, llm: LLMAdapter, store: ReminderStore, files: File
     return True
 
 
-def run_text(config: Config, session: ChatSession) -> None:
+def run_text(config: Config, session: ChatSession, sources: Sources) -> None:
     print(f"Jarvis ({config.llm_model}). {HELP}")
     while True:
         try:
@@ -191,6 +220,8 @@ def run_text(config: Config, session: ChatSession) -> None:
             continue
 
         print(f"jarvis> {reply.text or '(no reply text)'}")
+        if found := sources.take():
+            print(format_sources(found))
         if reply.incomplete_reason:
             print(f"  (reply cut short: {reply.incomplete_reason})")
         if reply.usage:

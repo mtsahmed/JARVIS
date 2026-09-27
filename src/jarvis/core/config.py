@@ -26,10 +26,14 @@ _KEYS = (
     "JARVIS_REASONING_EFFORT",
     "JARVIS_DATA_DIR",
     "JARVIS_FILE_SEARCH_DIRS",
+    "JARVIS_SEARCH_PROVIDER",
+    "TAVILY_API_KEY",
 )
 
 # Secret key required for each supported LLM provider.
 _PROVIDER_SECRET = {"openai": "OPENAI_API_KEY"}
+# Secret key required for each supported web search provider.
+_SEARCH_SECRET = {"tavily": "TAVILY_API_KEY"}
 
 # Accepted reasoning-effort values (from the openai SDK's ReasoningEffort type).
 # Not every model supports every value.
@@ -53,13 +57,15 @@ class Config:
     file_search_dirs: tuple[Path, ...]  # folders file search may index; empty = file search off
     # None = do not send; the provider uses its default.
     reasoning_effort: str | None
-    # repr=False keeps the key out of repr()/str(), and therefore out of logs.
+    search_provider: str | None  # web search provider; None = web search off
+    # repr=False keeps the keys out of repr()/str(), and therefore out of logs.
     llm_api_key: str = field(repr=False)
+    search_api_key: str | None = field(default=None, repr=False)
 
     @property
     def secrets(self) -> tuple[str, ...]:
         """All secret values, for log redaction."""
-        return (self.llm_api_key,)
+        return tuple(s for s in (self.llm_api_key, self.search_api_key) if s)
 
 
 def _read_values(env_path: Path, keys: tuple[str, ...] = _KEYS) -> dict[str, str]:
@@ -124,6 +130,14 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         allowed = ", ".join(_REASONING_EFFORTS)
         raise ConfigError(f"JARVIS_REASONING_EFFORT must be one of: {allowed}; got {reasoning_effort!r}.")
 
+    search_provider = values.get("JARVIS_SEARCH_PROVIDER", "").lower() or None
+    search_api_key = None
+    if search_provider is not None:
+        if search_provider not in _SEARCH_SECRET:
+            supported = ", ".join(sorted(_SEARCH_SECRET))
+            raise ConfigError(f"Unsupported JARVIS_SEARCH_PROVIDER {search_provider!r} (supported: {supported}).")
+        search_api_key = _require(values, _SEARCH_SECRET[search_provider], env_path)
+
     return Config(
         llm_provider=provider,
         llm_model=_require(values, "JARVIS_LLM_MODEL", env_path),
@@ -135,7 +149,9 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         data_dir=_resolve_dir(values.get("JARVIS_DATA_DIR", "data"), project_root),
         file_search_dirs=_existing_dirs(values.get("JARVIS_FILE_SEARCH_DIRS", ""), env_path),
         reasoning_effort=reasoning_effort,
+        search_provider=search_provider,
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
+        search_api_key=search_api_key,
     )
 
 

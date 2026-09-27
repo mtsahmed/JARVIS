@@ -24,7 +24,7 @@ A personal assistant, **primarily controlled by voice**, that runs on the owner'
 |---|---|---|---|
 | UC1 | Reminders | Create, list, and cancel reminders by voice; spoken alert plus desktop notification when due | Write (local only), auto-approved |
 | UC2 | File search | Find files by name and content (.txt, .md, .csv, .pdf) in the **one approved folder** `Documents\Files for JARVIS to Access` (owner decision 2026-09-28); read out top results; open (CONFIRM) or read a file's text for a question (CONFIRM: text is sent to OpenAI) | Read-only |
-| UC3 | Web search | Answer spoken questions with current web information; short spoken answer, sources shown on screen | Read-only |
+| UC3 | Web search | Answer spoken questions with current web information via Tavily (AUTO; 1 credit per search); short spoken answer, sources shown on screen, never read aloud | Read-only |
 | UC4 | Email briefing | Spoken daily summary of important unread Gmail messages | Read-only (no sending in v1) |
 
 Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unofficial personal-account automation violates WhatsApp's terms and risks bans), wake word, proactive suggestions.
@@ -83,6 +83,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
+- Web questions take 5-9 s in voice mode (search round trips plus answer). Option: say a short "Let me check" when a search starts
 - Optional: if a hanging network makes offline voice turns slow (cloud STT timeout 15 s), skip the cloud for a few minutes after a failure
 
 ## 9. Measurements (Phase 2, 2026-09-27)

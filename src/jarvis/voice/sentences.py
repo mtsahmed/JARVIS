@@ -44,6 +44,7 @@ class SentenceSplitter:
 _LIST_MARKER = re.compile(r"^\s*(?:[-*•]+|#+|\d+[.)])\s+")
 _MARKUP = re.compile(r"[*_`#>|]+")
 _DASHES = re.compile(r"\s*[—–]\s*")
+_NUMBER_RANGE = re.compile(r"(\d)\s*[—–]\s*(\$?\d)")
 
 
 def speakable(sentence: str) -> str:
@@ -51,5 +52,6 @@ def speakable(sentence: str) -> str:
     # Per line: a short fragment can be joined with the next line, which may start with its own bullet.
     text = "\n".join(_LIST_MARKER.sub("", line) for line in sentence.splitlines())
     text = _MARKUP.sub("", text)
+    text = _NUMBER_RANGE.sub(r"\1 to \2", text)  # "$4.9–5.0T" is said as "4.9 to 5.0", not "4.9, 5.0"
     text = _DASHES.sub(", ", text)
     return " ".join(text.split())
