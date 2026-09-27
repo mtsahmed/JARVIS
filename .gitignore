@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+
+# Local environment and runtime data
+.venv/
+data/
+logs/
+
+# Python build / cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db

@@ -1,0 +1,32 @@
+[build-system]
+# setuptools: build backend for `pip install -e .` (build-time only, not shipped).
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "Voice-first personal assistant (Phase 1: text core)"
+requires-python = ">=3.11"
+dependencies = [
+    # openai: official SDK for the LLM adapter (Responses API); imported only in src/jarvis/llm/.
+    "openai>=3.19,<4",
+    # python-dotenv: reads .env into config (dotenv_values); standard, well-tested .env parsing.
+    "python-dotenv>=1.2,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    # pytest: test runner for tests/.
+    "pytest",
+]
+
+[project.scripts]
+# Entry point is created in step 4 (src/jarvis/cli.py).
+jarvis = "jarvis.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
