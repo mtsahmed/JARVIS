@@ -17,9 +17,11 @@ SAMPLE_RATE = 16_000
 
 
 class FasterWhisperAdapter:
-    def __init__(self, model: str, compute_type: str, beam_size: int, models_dir: Path) -> None:
+    def __init__(self, model: str, compute_type: str, beam_size: int, models_dir: Path,
+                 prompt: str | None = None) -> None:
         self._model_name = model
         self._beam_size = beam_size
+        self._prompt = prompt  # vocabulary hint for the first (for short clips: only) window
         models_dir.mkdir(parents=True, exist_ok=True)
         self._model = self._load(model, compute_type, models_dir)
 
@@ -56,6 +58,7 @@ class FasterWhisperAdapter:
                 # Library docs: False makes the model "less prone to getting stuck in a failure loop,
                 # such as repetition looping". Each push-to-talk clip is independent anyway.
                 condition_on_previous_text=False,
+                initial_prompt=self._prompt,
             )
             # segments is a generator; transcription happens while iterating.
             text = " ".join(s.text.strip() for s in segments if not _looks_hallucinated(s)).strip()

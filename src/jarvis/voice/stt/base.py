@@ -8,6 +8,14 @@ from typing import Protocol
 import numpy as np
 
 
+# Primes speech recognition with the words Jarvis commands use (e.g. so "cancel" is not heard as
+# "cancer"). General on purpose: it must not copy the benchmark sentences, or tests would overrate it.
+VOCABULARY_HINT = (
+    "Jarvis is a personal voice assistant. Typical requests: set a reminder, remind me in five minutes, "
+    "list my reminders, cancel a reminder, search my files, open a document, search the web, read my email."
+)
+
+
 @dataclass(frozen=True)
 class Transcript:
     text: str  # empty when no speech was recognized

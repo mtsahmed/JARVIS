@@ -1,7 +1,7 @@
 """STT benchmark: accuracy, latency, and RAM of faster-whisper models on this laptop.
 
 Usage (from the project root):
-    .venv\\Scripts\\python scripts\\benchmark_stt.py record    # read 5 phrases aloud (once)
+    .venv\\Scripts\\python scripts\\benchmark_stt.py record    # read the command phrases aloud (once)
     .venv\\Scripts\\python scripts\\benchmark_stt.py record --timed   # hands-free: hear, beep, repeat
     .venv\\Scripts\\python scripts\\benchmark_stt.py run       # benchmark tiny.en, base.en, small.en
     .venv\\Scripts\\python scripts\\benchmark_stt.py run --models base.en distil-small.en
@@ -29,20 +29,27 @@ import psutil
 
 from jarvis.core.config import load_voice_config
 
+# Real Jarvis commands, including words that were misheard in use ("cancel" -> "cancer").
 PROMPTS = (
-    "Remind me to call my mother this evening.",
-    "Find the budget spreadsheet in my documents folder.",
-    "What is the weather going to be like tomorrow?",
-    "Summarize my unread emails from this morning.",
-    "Cancel the reminder about the dentist appointment.",
+    "Remind me to stretch in two minutes.",
+    "Cancel all my reminders.",
+    "What reminders do I have for tomorrow?",
+    "Remind me to call the dentist tomorrow at nine.",
+    "Open my budget spreadsheet.",
+    "Find the file about my car insurance.",
+    "What's the weather going to be like this weekend?",
+    "Search the web for the latest news about Apple.",
+    "What is the market cap of Apple?",
+    "Cancel the reminder about the dentist.",
 )
-DEFAULT_MODELS = ("tiny.en", "base.en", "small.en")
+# "openai:<model>" measures OpenAI's cloud transcription (sends the clips to OpenAI; ~$0.003/minute).
+DEFAULT_MODELS = ("base.en",)
 SAMPLE_RATE = 16_000
 RESULT_MARKER = "BENCHMARK_RESULT "
 
 
 def bench_dir() -> Path:
-    return load_voice_config().data_dir / "benchmark"
+    return load_voice_config().data_dir / "benchmark" / "commands"
 
 
 def clip_path(i: int) -> Path:
@@ -100,7 +107,7 @@ def record_timed(seconds: float) -> None:
         peak = float(np.abs(samples).max()) if samples.size else 0.0
         write_wav(clip_path(i), samples)
         warn = "  (very quiet - consider re-recording)" if peak < 0.05 else ""
-        print(f'[{i + 1}/5] "{prompt}": saved {samples.size / SAMPLE_RATE:.1f}s, peak {peak:.2f}{warn}', flush=True)
+        print(f'[{i + 1}/{len(PROMPTS)}] "{prompt}": saved {samples.size / SAMPLE_RATE:.1f}s, peak {peak:.2f}{warn}', flush=True)
     say("Done. Thank you.")
 
 
@@ -108,9 +115,9 @@ def record() -> None:
     from jarvis.voice.audio import Recorder
 
     bench_dir().mkdir(parents=True, exist_ok=True)
-    print("You will read 5 short phrases. For each: press Enter, read it, press Enter again.\n")
+    print(f"You will read {len(PROMPTS)} short phrases. For each: press Enter, read it, press Enter again.\n")
     for i, prompt in enumerate(PROMPTS):
-        print(f'[{i + 1}/5]  "{prompt}"')
+        print(f'[{i + 1}/{len(PROMPTS)}]  "{prompt}"')
         input("   Enter to START...")
         recorder = Recorder(max_seconds=15)
         recorder.start()
@@ -134,8 +141,14 @@ def worker(model: str, download_only: bool) -> None:
     from jarvis.voice.stt.factory import create_stt
 
     config = load_voice_config()
+    provider, api_key = None, None
+    if model.startswith("openai:"):
+        from jarvis.core.config import load_config
+
+        provider, model, api_key = "openai", model.split(":", 1)[1], load_config().llm_api_key
     if download_only:
-        create_stt(config, model=model)
+        if provider is None:  # cloud models have nothing to download
+            create_stt(config, model=model)
         return
 
     clips = [read_wav(clip_path(i)) for i in range(len(PROMPTS))]
@@ -151,7 +164,7 @@ def worker(model: str, download_only: bool) -> None:
     sampler.start()
     rss_before = rss_mb()
     started = time.perf_counter()
-    stt = create_stt(config, model=model)
+    stt = create_stt(config, model=model, provider=provider, api_key=api_key)
     load_s = time.perf_counter() - started
     rss_loaded = rss_mb()
 
