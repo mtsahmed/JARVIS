@@ -166,3 +166,17 @@ def test_empty_reply_gets_fallback_answer() -> None:
     loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
     assert speaker.spoken == ["Sorry, I don't have an answer for that."]
     assert records[-1]["kind"] == "voice_turn"
+
+
+def test_markdown_reply_is_cleaned_before_speaking() -> None:
+    pieces = ["Here are options:\n", "- **Quick** questions\n", "***\n", "- Task planning\n"]
+    loop, *_, speaker, records = make(llm=FakeLLM(pieces))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert speaker.spoken == ["Here are options:", "Quick questions", "Task planning"]
+    assert records[-1]["sentences"] == 3
+
+
+def test_voice_instructions_ask_for_short_plain_speech() -> None:
+    from jarvis.voice.loop import VOICE_INSTRUCTIONS
+
+    assert "spoken aloud" in VOICE_INSTRUCTIONS and "Never use lists" in VOICE_INSTRUCTIONS

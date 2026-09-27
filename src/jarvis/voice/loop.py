@@ -16,13 +16,22 @@ from jarvis.core.chat import ChatSession
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
-from jarvis.voice.sentences import SentenceSplitter
+from jarvis.voice.sentences import SentenceSplitter, speakable
 from jarvis.voice.stt.base import STTAdapter, STTError
 from jarvis.voice.tts.base import TTSError
 
 logger = logging.getLogger(__name__)
 
 MIN_SPEECH_SECONDS = 0.3
+
+# Voice mode only: replies are heard, not read, so they must be short and plain.
+VOICE_INSTRUCTIONS = (
+    "You are Jarvis, a personal voice assistant. Your reply will be spoken aloud. "
+    "Answer in one to three short sentences of plain spoken English. "
+    "Never use lists, bullet points, headings, markdown, emojis, URLs, or special symbols. "
+    "If the request is unclear, ask one short question. "
+    "If a full answer would be long, give the key point and offer to say more."
+)
 _POLL_SECONDS = 0.2  # queue waits time out regularly so Ctrl+C works on Windows
 
 
@@ -124,7 +133,9 @@ class VoiceLoop:
 
         until_speak_ms: int | None = None
         spoken = 0
-        while (sentence := self._next_sentence(sentences)) is not None:
+        while (raw := self._next_sentence(sentences)) is not None:
+            if not (sentence := speakable(raw)):
+                continue  # nothing left to say once markdown is removed
             if until_speak_ms is None:
                 until_speak_ms = _ms_since(ended_at)
                 print("jarvis>", end="", flush=True)

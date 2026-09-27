@@ -39,3 +39,17 @@ class SentenceSplitter:
     def _ends_with_abbreviation(sentence: str) -> bool:
         last_word = sentence.rstrip(".!?\"')] \n").rsplit(maxsplit=1)[-1].lower() if sentence.strip() else ""
         return sentence.rstrip().endswith(".") and last_word in _ABBREVIATIONS
+
+
+_LIST_MARKER = re.compile(r"^\s*(?:[-*•]+|#+|\d+[.)])\s+")
+_MARKUP = re.compile(r"[*_`#>|]+")
+_DASHES = re.compile(r"\s*[—–]\s*")
+
+
+def speakable(sentence: str) -> str:
+    """Strip markdown and symbols a voice would read out literally (bullets, **bold**, headings, dashes)."""
+    # Per line: a short fragment can be joined with the next line, which may start with its own bullet.
+    text = "\n".join(_LIST_MARKER.sub("", line) for line in sentence.splitlines())
+    text = _MARKUP.sub("", text)
+    text = _DASHES.sub(", ", text)
+    return " ".join(text.split())

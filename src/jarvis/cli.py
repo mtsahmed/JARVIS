@@ -9,7 +9,7 @@ import sys
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
-from jarvis.llm.base import LLMError
+from jarvis.llm.base import LLMAdapter, LLMError
 from jarvis.llm.factory import create_llm
 
 logger = logging.getLogger(__name__)
@@ -36,22 +36,20 @@ def main() -> int:
     except LLMError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    session = ChatSession(llm, history_turns=config.history_turns)
-
-    if args.voice and run_voice(config, session):
+    if args.voice and run_voice(config, llm):
         logger.info("Jarvis stopped")
         return 0
-    run_text(config, session)
+    run_text(config, ChatSession(llm, history_turns=config.history_turns))
     logger.info("Jarvis stopped")
     return 0
 
 
-def run_voice(config: Config, session: ChatSession) -> bool:
+def run_voice(config: Config, llm: LLMAdapter) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
     from jarvis.voice.audio import AudioError, Recorder
-    from jarvis.voice.loop import VoiceLoop
+    from jarvis.voice.loop import VOICE_INSTRUCTIONS, VoiceLoop
     from jarvis.voice.push_to_talk import HotkeyListener
     from jarvis.voice.stt.base import STTError
     from jarvis.voice.stt.factory import create_stt
@@ -70,6 +68,7 @@ def run_voice(config: Config, session: ChatSession) -> bool:
         logger.warning("Voice mode unavailable: %s", e)
         return False
 
+    session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS)
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
                      hotkey.drain, voice.max_record_seconds)
     hotkey.start()

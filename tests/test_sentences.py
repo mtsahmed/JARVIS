@@ -42,3 +42,14 @@ def test_flush_empties_buffer() -> None:
     splitter.feed("unfinished")
     assert splitter.flush() == "unfinished"
     assert splitter.flush() == ""
+
+
+def test_speakable_strips_markdown_and_symbols() -> None:
+    from jarvis.voice.sentences import speakable
+
+    assert speakable("- Quick questions") == "Quick questions"
+    assert speakable("**Spectre**: premium — thin 2-in-1") == "Spectre: premium, thin 2-in-1"
+    assert speakable("## Tips") == "Tips"
+    assert speakable("2) Keep a regular bedtime.") == "Keep a regular bedtime."
+    assert speakable("Pi is 3.14 and costs $5.") == "Pi is 3.14 and costs $5."
+    assert speakable("***") == ""
