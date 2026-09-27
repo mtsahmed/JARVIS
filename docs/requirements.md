@@ -49,7 +49,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - **Security:** Secrets live in `.env` (never committed), later the Windows Credential Manager. Google OAuth uses read-only scopes. Every tool call is written to an audit log. A key that is ever exposed gets rotated immediately.
 - **Control:** Permission tiers are AUTO (read-only / local reminders), CONFIRM (anything that sends, deletes, or modifies external data), and BLOCKED (shell commands, payments, credential access).
 - **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s before streaming, **3.2 s after**; 2 of 8 live turns under 3 s; see §9). Replies are short and speakable; details appear on screen.
-- **Voice confirmations:** CONFIRM-tier actions are read back aloud and require a spoken "yes" (plus an on-screen button). Silence or unclear speech counts as "no".
+- **Voice confirmations:** CONFIRM-tier actions are read back aloud and require a spoken "yes" (plus an on-screen button). Silence or unclear speech counts as "no". A "yes" to opening or reading a file is remembered for that file (per action) until the conversation is reset or Jarvis exits (owner decision 2026-09-28); a "no" is never remembered, and cancelling reminders asks every time. Remembered approvals appear in the audit log as `remembered`.
 - **Reliability:** Graceful failure when offline or a provider is down; reminders still fire offline; text input always works if voice fails; if ElevenLabs quota is exhausted, fall back to the local voice.
 - **Maintainability:** Modular Python, one adapter per provider, tests for every tool.
 

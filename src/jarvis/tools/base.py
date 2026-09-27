@@ -35,6 +35,10 @@ class Tool:
     describe: Callable[[dict[str, Any]], str] | None = None
     # Optional per-call rule: returns a reason to BLOCK this call (e.g. a path outside approved folders).
     check: Callable[[dict[str, Any]], str | None] | None = None
+    # CONFIRM tools only: if set, a "yes" is remembered for the rest of the chat session for calls with
+    # the same key (e.g. the same file), so the user is asked once per file instead of every time.
+    # Leave unset for actions that must be confirmed every time (e.g. cancelling a reminder).
+    remember_key: Callable[[dict[str, Any]], str] | None = None
 
     def __post_init__(self) -> None:
         if self.tier is Tier.CONFIRM and self.describe is None:

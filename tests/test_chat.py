@@ -145,3 +145,13 @@ def test_tools_and_confirmer_reach_the_registry() -> None:
     session = ChatSession(CallsTool(), history_turns=5, usage_sink=records.append, tools=registry)
     assert session.ask("open it", confirmer=Yes()).text == "opened"
     assert opened == ["x"] and records[0]["tool_calls"] == 1
+
+
+def test_reset_forgets_approvals() -> None:
+    from jarvis.tools.registry import ToolRegistry
+
+    registry = ToolRegistry([], audit_sink=lambda r: None)
+    registry._approved.add(("read_file", "a.pdf"))
+    session = ChatSession(FakeLLM(), history_turns=5, usage_sink=lambda r: None, tools=registry)
+    session.reset()
+    assert registry._approved == set()

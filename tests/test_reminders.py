@@ -153,3 +153,13 @@ def test_background_thread_starts_and_stops(store: ReminderStore) -> None:
     scheduler.start()
     assert fired.get(timeout=2) == "now"
     scheduler.stop()
+
+
+def test_cancel_asks_every_time(store: ReminderStore) -> None:
+    registry, _, _ = setup(store)
+    create(registry, "a", "2026-09-27 18:30")
+    create(registry, "b", "2026-09-27 18:40")
+    answer = Answer(yes=True)
+    registry.run("cancel_reminder", '{"id": 1}', answer)
+    registry.run("cancel_reminder", '{"id": 2}', answer)
+    assert len(answer.asked) == 2

@@ -142,3 +142,51 @@ def test_schema_must_be_strict() -> None:
         Tool("x", "x", loose, Tier.AUTO, handler=lambda a: "")
     with pytest.raises(ValueError, match="additionalProperties"):
         Tool("x", "x", {"type": "object", "properties": {}, "required": []}, Tier.AUTO, handler=lambda a: "")
+
+
+# --- approvals remembered per chat session -----------------------------------------------------------
+
+
+def remembering_tool(ran: list[str]) -> Tool:
+    return Tool("read_file", "Read a file", PATH_ARGS, Tier.CONFIRM,
+                handler=lambda a: ran.append(a["path"]) or "text",
+                describe=lambda a: f"Read {a['path']}?", remember_key=lambda a: a["path"].lower())
+
+
+def test_yes_remembered_for_same_file_only() -> None:
+    ran: list[str] = []
+    registry, audit = make(remembering_tool(ran))
+    answer = Answer(yes=True)
+    for path in ("a.pdf", "A.PDF", "a.pdf", "b.pdf"):
+        registry.run("read_file", json.dumps({"path": path}), answer)
+    assert answer.asked == ["Read a.pdf?", "Read b.pdf?"]  # asked once per file
+    assert len(ran) == 4
+    assert [a["decision"] for a in audit] == ["approved", "remembered", "remembered", "approved"]
+
+
+def test_no_is_not_remembered() -> None:
+    ran: list[str] = []
+    registry, _ = make(remembering_tool(ran))
+    no = Answer(yes=False)
+    registry.run("read_file", json.dumps({"path": "a.pdf"}), no)
+    registry.run("read_file", json.dumps({"path": "a.pdf"}), no)
+    assert len(no.asked) == 2 and ran == []
+
+
+def test_forget_approvals_asks_again() -> None:
+    ran: list[str] = []
+    registry, _ = make(remembering_tool(ran))
+    answer = Answer(yes=True)
+    registry.run("read_file", json.dumps({"path": "a.pdf"}), answer)
+    registry.forget_approvals()
+    registry.run("read_file", json.dumps({"path": "a.pdf"}), answer)
+    assert len(answer.asked) == 2
+
+
+def test_tools_without_remember_key_always_ask() -> None:
+    ran: list[str] = []
+    registry, _ = make(confirm_tool(ran))
+    answer = Answer(yes=True)
+    registry.run("open_file", json.dumps({"path": "a.txt"}), answer)
+    registry.run("open_file", json.dumps({"path": "a.txt"}), answer)
+    assert len(answer.asked) == 2

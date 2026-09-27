@@ -32,6 +32,11 @@ class ToolRegistry:
     def __init__(self, tools: Iterable[Tool], audit_sink: Callable[[dict[str, Any]], None] = log_audit) -> None:
         self._tools = {tool.name: tool for tool in tools}
         self._audit = audit_sink
+        self._approved: set[tuple[str, str]] = set()  # (tool, remember_key) approved in this chat session
+
+    def forget_approvals(self) -> None:
+        """Start a new chat session: every CONFIRM action asks again."""
+        self._approved.clear()
 
     def specs(self) -> list[ToolSpec]:
         """Tools offered to the model. BLOCKED tools are never offered."""
@@ -61,10 +66,16 @@ class ToolRegistry:
         decision = "auto"
         if tool.tier is Tier.CONFIRM:
             assert tool.describe is not None  # enforced by Tool
-            approved = (confirmer or DenyAll()).confirm(tool.describe(args))
-            decision = "approved" if approved else "denied"
-            if not approved:
-                return self._finish(entry, started, decision, "denied", DECLINED)
+            remembered = (tool.name, tool.remember_key(args)) if tool.remember_key else None
+            if remembered is not None and remembered in self._approved:
+                decision = "remembered"  # the user already said yes to this in this chat session
+            else:
+                approved = (confirmer or DenyAll()).confirm(tool.describe(args))
+                decision = "approved" if approved else "denied"
+                if not approved:  # a "no" is not remembered: the next request asks again
+                    return self._finish(entry, started, decision, "denied", DECLINED)
+                if remembered is not None:
+                    self._approved.add(remembered)
 
         try:
             result = tool.handler(args)

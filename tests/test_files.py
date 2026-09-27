@@ -196,3 +196,18 @@ def test_narrowing_approved_folder_purges_old_entries_immediately(docs: dict[str
     assert [h.name for h in index.search("budget")] == ["budget.csv"]
     assert index.search("car insurance") == [] and index.search("tomatoes") == []  # outside: gone at once
     assert "outside" in (index.refusal(docs["root"] / "notes.md") or "")
+
+
+def test_file_permissions_asked_once_per_file_and_action(docs: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    registry, opened, audit = setup_tools(docs, monkeypatch)
+    answer = Answer(True)
+    pdf, csv = docs["root"] / "car-insurance_2025.pdf", docs["root"] / "Finance" / "budget.csv"
+    registry.run("read_file", arg(pdf, focus="glass"), answer)
+    registry.run("read_file", arg(pdf, focus="price"), answer)  # same file, new question: not asked
+    registry.run("read_file", arg(docs["root"] / "Finance" / ".." / "car-insurance_2025.pdf", focus=""), answer)
+    registry.run("open_file", arg(pdf), answer)  # opening is a separate permission
+    registry.run("open_file", arg(pdf), answer)
+    registry.run("read_file", arg(csv, focus=""), answer)  # a different file asks again
+    assert answer.asked == ["Read car-insurance_2025.pdf and send its text to OpenAI?", "Open car-insurance_2025.pdf?",
+                            "Read budget.csv and send its text to OpenAI?"]
+    assert [a["decision"] for a in audit].count("remembered") == 3

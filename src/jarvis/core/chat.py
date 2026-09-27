@@ -46,8 +46,11 @@ class ChatSession:
         return tuple(self._history)
 
     def reset(self) -> None:
+        """Start a new conversation: history and remembered approvals are cleared."""
         self._history.clear()
-        logger.info("Chat history cleared")
+        if self._tools:
+            self._tools.forget_approvals()
+        logger.info("Chat history and remembered approvals cleared")
 
     def ask(
         self,

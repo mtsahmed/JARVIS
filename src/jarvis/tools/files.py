@@ -202,6 +202,10 @@ def _relevant_excerpt(text: str, focus: str) -> str:
 def file_tools(index: FileIndex) -> list[Tool]:
     path_schema = {"type": "string", "description": "Full path exactly as returned by search_files."}
 
+    def same_file(args: dict[str, Any]) -> str:
+        # One key per file however the path is written (case, "..", links).
+        return os.path.normcase(str(Path(str(args["path"])).resolve()))
+
     def check_path(args: dict[str, Any]) -> str | None:
         path = Path(str(args["path"]))
         return index.refusal(path)
@@ -261,6 +265,7 @@ def file_tools(index: FileIndex) -> list[Tool]:
             open_file,
             describe=lambda a: f"Open {Path(str(a['path'])).name}?",
             check=check_open,
+            remember_key=same_file,  # asked once per file per chat session
         ),
         Tool(
             "read_file",
@@ -274,5 +279,6 @@ def file_tools(index: FileIndex) -> list[Tool]:
             read_file,
             describe=lambda a: f"Read {Path(str(a['path'])).name} and send its text to OpenAI?",
             check=check_path,
+            remember_key=same_file,  # asked once per file per chat session
         ),
     ]
