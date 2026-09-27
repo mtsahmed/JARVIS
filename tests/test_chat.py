@@ -19,7 +19,7 @@ class FakeLLM:
     def model(self) -> str:
         return "fake-model"
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None) -> LLMReply:
+    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None) -> LLMReply:
         self.calls.append(list(messages))
         if self._fail:
             raise LLMError("provider down")
@@ -90,3 +90,17 @@ def test_empty_reply_not_added_to_history() -> None:
     session, _ = make_session(FakeLLM(reply_text=""))
     session.ask("hello")
     assert session.history == ()
+
+
+def test_on_text_passed_through_to_llm() -> None:
+    received: list[Any] = []
+
+    class StreamingLLM(FakeLLM):
+        def generate(self, messages, instructions=None, on_text=None):  # type: ignore[no-untyped-def]
+            received.append(on_text)
+            return super().generate(messages, instructions)
+
+    session, _ = make_session(StreamingLLM())
+    callback = print
+    session.ask("hi", on_text=callback)
+    assert received == [callback]

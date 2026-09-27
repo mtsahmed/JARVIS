@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, Protocol
@@ -15,6 +16,7 @@ from jarvis.core.chat import ChatSession
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
+from jarvis.voice.sentences import SentenceSplitter
 from jarvis.voice.stt.base import STTAdapter, STTError
 from jarvis.voice.tts.base import TTSError
 
@@ -113,26 +115,69 @@ class VoiceLoop:
             return
         print(f"you said> {transcript.text}")
 
-        started = time.perf_counter()
-        try:
-            reply = self._session.ask(transcript.text)
-        except LLMError as e:
-            print(f"[error] {e}")
-            self._say("Sorry, I couldn't reach my language service.")
-            return
-        llm_ms = _ms_since(started)
+        # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
+        # is complete, so Jarvis starts talking while the rest of the reply is still being written.
+        sentences: queue.Queue[str | None] = queue.Queue()
+        outcome: dict[str, Any] = {}
+        worker = threading.Thread(target=self._stream_reply, args=(transcript.text, sentences, outcome), daemon=True)
+        worker.start()
 
-        text = reply.text or "Sorry, I don't have an answer for that."
-        print(f"jarvis> {text}")
-        until_speak_ms = _ms_since(ended_at)
-        self._say(text)
+        until_speak_ms: int | None = None
+        spoken = 0
+        while (sentence := self._next_sentence(sentences)) is not None:
+            if until_speak_ms is None:
+                until_speak_ms = _ms_since(ended_at)
+                print("jarvis>", end="", flush=True)
+            print(f" {sentence}", end="", flush=True)
+            self._say(sentence)
+            spoken += 1
+        if spoken:
+            print()
+        worker.join()
+
+        if "error" in outcome:
+            error = outcome["error"]
+            if not isinstance(error, LLMError):
+                raise error  # unexpected bug: handled and logged by run()
+            print(f"[error] {error}")
+            if not spoken:
+                self._say("Sorry, I couldn't reach my language service.")
+            return
+        if not spoken:
+            until_speak_ms = _ms_since(ended_at)
+            print("jarvis> (no answer)")
+            self._say("Sorry, I don't have an answer for that.")
+
         self._usage_sink({
             "kind": "voice_turn",
             "stt_ms": stt_ms,
-            "llm_ms": llm_ms,
-            "until_speak_ms": until_speak_ms,  # end of speech -> reply handed to TTS
+            "llm_ms": outcome["llm_ms"],  # full reply, start to finish
+            "until_speak_ms": until_speak_ms,  # end of speech -> first sentence handed to TTS
+            "sentences": spoken,
             "rss_mb": round(psutil.Process().memory_info().rss / 1_048_576),
         })
+
+    def _stream_reply(self, text: str, sentences: queue.Queue[str | None], outcome: dict[str, Any]) -> None:
+        """Worker thread: stream the LLM reply and queue complete sentences. Always ends with None."""
+        splitter = SentenceSplitter()
+        started = time.perf_counter()
+        try:
+            self._session.ask(text, on_text=lambda piece: [sentences.put(s) for s in splitter.feed(piece)])
+            if rest := splitter.flush():
+                sentences.put(rest)
+        except Exception as e:  # handed to the main thread
+            outcome["error"] = e
+        finally:
+            outcome["llm_ms"] = _ms_since(started)
+            sentences.put(None)
+
+    @staticmethod
+    def _next_sentence(sentences: queue.Queue[str | None]) -> str | None:
+        while True:
+            try:
+                return sentences.get(timeout=_POLL_SECONDS)  # timeout keeps Ctrl+C responsive on Windows
+            except queue.Empty:
+                continue
 
     def _say(self, text: str) -> None:
         try:

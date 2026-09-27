@@ -40,12 +40,15 @@ class ChatSession:
         self._history.clear()
         logger.info("Chat history cleared")
 
-    def ask(self, text: str) -> LLMReply:
-        """Send one user message with recent history. Raises LLMError on provider failure."""
+    def ask(self, text: str, on_text: Callable[[str], None] | None = None) -> LLMReply:
+        """Send one user message with recent history. Raises LLMError on provider failure.
+
+        `on_text` (optional) receives the reply in pieces as it streams in.
+        """
         messages = [*self._history[-self._max_messages :], Message("user", text)]
         started = time.perf_counter()
         try:
-            reply = self._llm.generate(messages, self._instructions)
+            reply = self._llm.generate(messages, self._instructions, on_text=on_text)
         except LLMError:
             self._record_usage(None, started, status="error")
             raise

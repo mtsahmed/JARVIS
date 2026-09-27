@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import openai
 from openai import OpenAI
-from openai.types.responses import ResponseUsage
+from openai.types.responses import Response, ResponseUsage
 
 from jarvis.llm.base import LLMError, LLMReply, Message, Usage
 
@@ -35,19 +35,26 @@ class OpenAIAdapter:
     def model(self) -> str:
         return self._model
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None) -> LLMReply:
-        extra: dict[str, Any] = {}
+    def generate(
+        self,
+        messages: Sequence[Message],
+        instructions: str | None = None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> LLMReply:
+        request: dict[str, Any] = {
+            "model": self._model,
+            "instructions": instructions,
+            "input": [{"role": m.role, "content": m.content} for m in messages],
+            "max_output_tokens": self._max_output_tokens,
+            "store": False,  # do not keep conversations on OpenAI's servers
+        }
         if self._reasoning_effort is not None:
-            extra["reasoning"] = {"effort": self._reasoning_effort}
+            request["reasoning"] = {"effort": self._reasoning_effort}
         try:
-            response = self._client.responses.create(
-                model=self._model,
-                instructions=instructions,
-                input=[{"role": m.role, "content": m.content} for m in messages],
-                max_output_tokens=self._max_output_tokens,
-                store=False,  # do not keep conversations on OpenAI's servers
-                **extra,
-            )
+            if on_text is None:
+                response = self._client.responses.create(**request)
+            else:
+                response = self._stream(request, on_text)
         # Provider error text is not passed on (it can echo parts of the key); "from None" drops it from tracebacks.
         except openai.APITimeoutError:
             logger.warning("OpenAI request timed out after %ss", self._timeout_seconds)
@@ -85,6 +92,21 @@ class OpenAIAdapter:
             usage=_to_usage(response.usage),
             incomplete_reason=incomplete_reason,
         )
+
+
+    def _stream(self, request: dict[str, Any], on_text: Callable[[str], None]) -> Response:
+        """Stream the reply, passing text deltas to on_text; return the final Response."""
+        with self._client.responses.create(**request, stream=True) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    on_text(event.delta)
+                elif event.type in ("response.completed", "response.incomplete", "response.failed"):
+                    return event.response
+                elif event.type == "error":
+                    logger.error("OpenAI stream error: %s", event.code)
+                    raise LLMError(f"OpenAI stopped the reply ({event.code or 'stream error'}).")
+        logger.error("OpenAI stream ended without a final response")
+        raise LLMError("OpenAI's reply ended unexpectedly. Try again.")
 
 
 def _to_usage(usage: ResponseUsage | None) -> Usage | None:

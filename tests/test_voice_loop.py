@@ -31,18 +31,25 @@ class FakeSTT:
 
 
 class FakeLLM:
-    def __init__(self, fail: bool = False) -> None:
-        self._fail, self.calls = fail, 0
+    """Streams `pieces` through on_text, like the real adapter; can fail before or mid-stream."""
+
+    def __init__(self, pieces: Sequence[str] = ("Fo", "ur."), fail: bool = False, fail_after: int | None = None) -> None:
+        self._pieces, self._fail, self._fail_after, self.calls = list(pieces), fail, fail_after, 0
 
     @property
     def model(self) -> str:
         return "fake-llm"
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None) -> LLMReply:
+    def generate(self, messages: Sequence[Message], instructions: str | None = None, on_text=None) -> LLMReply:
         self.calls += 1
         if self._fail:
             raise LLMError("llm down")
-        return LLMReply(text="Four.", model="fake-llm", usage=None)
+        for i, piece in enumerate(self._pieces):
+            if self._fail_after is not None and i == self._fail_after:
+                raise LLMError("connection dropped")
+            if on_text:
+                on_text(piece)
+        return LLMReply(text="".join(self._pieces), model="fake-llm", usage=None)
 
 
 class FakeSpeaker:
@@ -111,3 +118,51 @@ def test_llm_error_is_spoken_not_raised() -> None:
 def test_speaker_error_does_not_raise() -> None:
     loop, *_ = make(speaker=FakeSpeaker(fail=True))
     loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())  # must not raise
+
+
+def test_reply_spoken_sentence_by_sentence_in_order() -> None:
+    pieces = ["Paris is the capital", " of France. It has about", " two million people. Anything else", "?"]
+    loop, *_, speaker, records = make(llm=FakeLLM(pieces))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert speaker.spoken == [
+        "Paris is the capital of France.",
+        "It has about two million people.",
+        "Anything else?",
+    ]
+    assert records[-1]["sentences"] == 3
+
+
+def test_first_sentence_spoken_before_reply_finishes() -> None:
+    events: list[str] = []
+
+    class SlowLLM(FakeLLM):
+        def generate(self, messages, instructions=None, on_text=None):  # type: ignore[no-untyped-def]
+            on_text("First sentence here. ")
+            time.sleep(0.3)  # rest of the reply still "generating"
+            events.append("llm finished")
+            on_text("Second one.")
+            return LLMReply(text="First sentence here. Second one.", model="fake", usage=None)
+
+    class RecordingSpeaker(FakeSpeaker):
+        def speak(self, text: str) -> str:
+            events.append(f"spoke: {text}")
+            return super().speak(text)
+
+    loop, *_ = make(llm=SlowLLM(), speaker=RecordingSpeaker())
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert events[0] == "spoke: First sentence here."
+    assert events.index("llm finished") > 0
+
+
+def test_error_mid_stream_keeps_spoken_part_and_does_not_apologize() -> None:
+    loop, *_, speaker, records = make(llm=FakeLLM(["One sentence done. ", "Two"], fail_after=1))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert speaker.spoken == ["One sentence done."]
+    assert records[-1]["kind"] == "llm" and records[-1]["status"] == "error"
+
+
+def test_empty_reply_gets_fallback_answer() -> None:
+    loop, *_, speaker, records = make(llm=FakeLLM([]))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert speaker.spoken == ["Sorry, I don't have an answer for that."]
+    assert records[-1]["kind"] == "voice_turn"

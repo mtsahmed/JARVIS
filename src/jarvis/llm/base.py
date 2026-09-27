@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -41,6 +41,14 @@ class LLMAdapter(Protocol):
     @property
     def model(self) -> str: ...
 
-    def generate(self, messages: Sequence[Message], instructions: str | None = None) -> LLMReply:
-        """Send the conversation and return the reply. Raises LLMError on failure."""
+    def generate(
+        self,
+        messages: Sequence[Message],
+        instructions: str | None = None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> LLMReply:
+        """Send the conversation and return the full reply. Raises LLMError on failure.
+
+        If `on_text` is given, the reply is streamed and each text piece is passed to it as it arrives.
+        """
         ...
