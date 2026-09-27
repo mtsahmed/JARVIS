@@ -45,7 +45,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 
 ## 5. Non-functional requirements
 - **Cost controls:** A spending/usage limit is set on every provider account. Output tokens are capped, conversation history is trimmed, and token usage and ElevenLabs characters are logged per request. Jarvis warns when monthly usage passes 80% of any limit.
-- **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. **Audio:** push-to-talk recordings are sent to OpenAI for transcription (owner decision 2026-09-28: 10/10 commands correct vs 6/10 locally); they are not stored by Jarvis, and local transcription is used when offline.
+- **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. **Audio:** push-to-talk recordings are sent to OpenAI for transcription (owner decision 2026-09-28: 10/10 commands correct vs 6/10 locally); they are not stored by Jarvis, and local transcription is used when offline. **Memory** (owner decisions 2026-09-28): facts are saved only when the user asks, no conversation transcripts are stored, forgotten facts are deleted from disk, and fact text is sent to OpenAI embeddings for recall.
 - **Security:** Secrets live in `.env` (never committed), later the Windows Credential Manager. Google OAuth uses read-only scopes. Every tool call is written to an audit log. A key that is ever exposed gets rotated immediately.
 - **Control:** Permission tiers are AUTO (read-only / local reminders), CONFIRM (anything that sends, deletes, or modifies external data), and BLOCKED (shell commands, payments, credential access).
 - **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s before streaming, **3.2 s after**; 2 of 8 live turns under 3 s; see §9). Replies are short and speakable; details appear on screen.
@@ -153,4 +153,18 @@ Local errors were on non-reminder commands ("Open" → "On", "car insurance" →
 - Simulated fully hijacked model that obeys planted text in a file or web result: could not cancel a reminder, run `setup.exe`, read `.env` (outside the folder), or open/read other files. Each attempt was BLOCKED without asking or asked and refused; remembered approvals did not extend to other files.
 - Real model, planted file and planted web result: 3/3 and 2/2 runs ignored the planted instructions and did only what the user asked (it flagged the hidden instructions to the user in 2 of 3 file runs).
 - Residual risk: AUTO actions (see open items).
+
+## 11. Phase 4 results (2026-09-28)
+
+**Memory** (`data/memory.db`, never committed):
+
+| Tool | Tier | Notes |
+|---|---|---|
+| remember | AUTO, guarded | runs only when the user's own words in that turn ask to remember ("remember", "don't forget", "note that", ...); otherwise BLOCKED, so text in a file or web page cannot plant a persistent "memory" |
+| list_memories | AUTO | |
+| forget_memory | CONFIRM (every time) | really deletes the row |
+
+- Recall: with 20 or fewer memories all are given to the model (no extra call); with more, OpenAI `text-embedding-3-small` picks the 8 most similar (similarity >= 0.25). Measured: related fact/question ~0.45, unrelated ~0.1-0.2; lookup ~250 ms.
+- Identical facts are not duplicated; similar facts are kept side by side and the model is told about the older one (silent merging could lose a different fact).
+- Live check (gpt-5-mini): facts saved in session 1 were recalled in session 2 from differently worded questions; listing and forgetting (after yes) worked; with 22 memories, recall found insurance, allergy and pet facts. Done-when met.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from jarvis.core.config import Config
-from jarvis.llm.base import LLMAdapter, LLMError
+from jarvis.llm.base import Embedder, LLMAdapter, LLMError
 
 
 def create_llm(config: Config) -> LLMAdapter:
@@ -19,3 +19,14 @@ def create_llm(config: Config) -> LLMAdapter:
             reasoning_effort=config.reasoning_effort,
         )
     raise LLMError(f"No adapter for LLM provider {config.llm_provider!r}.")
+
+
+def create_embedder(config: Config) -> Embedder | None:
+    """The embedding adapter for memory recall, or None if JARVIS_EMBEDDING_MODEL is blank."""
+    if not config.embedding_model:
+        return None
+    if config.llm_provider == "openai":
+        from jarvis.llm.openai_embeddings import OpenAIEmbedder
+
+        return OpenAIEmbedder(config.llm_api_key, config.embedding_model)
+    raise LLMError(f"No embedding adapter for provider {config.llm_provider!r}.")

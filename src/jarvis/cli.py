@@ -14,7 +14,9 @@ from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
 from jarvis.core.scheduler import ReminderScheduler
 from jarvis.llm.base import LLMAdapter, LLMError
-from jarvis.llm.factory import create_llm
+from jarvis.llm.factory import create_embedder, create_llm
+from jarvis.memory.store import MemoryStore
+from jarvis.memory.tools import memory_tools
 from jarvis.tools.files import FileIndex, file_tools
 from jarvis.tools.registry import ToolRegistry
 from jarvis.tools.search.base import SearchAdapter, SearchError
@@ -47,10 +49,11 @@ class Services:
     files: FileIndex | None
     search: SearchAdapter | None
     sources: Sources  # web sources of the latest answer, shown on screen
+    memory: MemoryStore  # facts the user asked Jarvis to remember
 
     def build_tools(self) -> ToolRegistry:
         """All tools Jarvis may use. Each declares its permission tier."""
-        tools = [*reminder_tools(self.store), *(file_tools(self.files) if self.files else [])]
+        tools = [*reminder_tools(self.store), *memory_tools(self.memory), *(file_tools(self.files) if self.files else [])]
         if self.search is not None:
             tools.append(web_search_tool(self.search, self.sources))
         return ToolRegistry(tools)
@@ -127,13 +130,14 @@ def main() -> int:
         return 1
 
     services = Services(ReminderStore(config.data_dir / "jarvis.db"), start_file_index(config), start_search(config),
-                        Sources())
+                        Sources(), MemoryStore(config.data_dir / "memory.db", create_embedder(config)))
     alerts = ReminderAlerts()
     scheduler = ReminderScheduler(services.store, alerts)
     try:
         if not (args.voice and run_voice(config, llm, services, alerts, scheduler)):
             scheduler.start()
-            session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools())
+            session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
+                                  memory=services.memory)
             run_text(config, session, services.sources)
     finally:
         scheduler.stop()
@@ -171,7 +175,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
         return False
 
     session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS,
-                          tools=services.build_tools())
+                          tools=services.build_tools(), memory=services.memory)
     alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
                      hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue,

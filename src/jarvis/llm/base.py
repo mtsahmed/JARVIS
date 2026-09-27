@@ -70,3 +70,14 @@ class LLMAdapter(Protocol):
         `run_tool` and its result sent back, until the model answers (a few rounds at most).
         """
         ...
+
+
+class Embedder(Protocol):
+    """Turns text into vectors for semantic similarity (memory recall)."""
+
+    @property
+    def model(self) -> str: ...
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """One vector per text, in order. Raises LLMError on failure."""
+        ...

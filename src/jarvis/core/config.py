@@ -28,6 +28,7 @@ _KEYS = (
     "JARVIS_FILE_SEARCH_DIRS",
     "JARVIS_SEARCH_PROVIDER",
     "TAVILY_API_KEY",
+    "JARVIS_EMBEDDING_MODEL",
 )
 
 # Secret key required for each supported LLM provider.
@@ -58,6 +59,7 @@ class Config:
     # None = do not send; the provider uses its default.
     reasoning_effort: str | None
     search_provider: str | None  # web search provider; None = web search off
+    embedding_model: str | None  # for memory recall; None = no smart recall (most recent memories are used)
     # repr=False keeps the keys out of repr()/str(), and therefore out of logs.
     llm_api_key: str = field(repr=False)
     search_api_key: str | None = field(default=None, repr=False)
@@ -150,6 +152,7 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         file_search_dirs=_existing_dirs(values.get("JARVIS_FILE_SEARCH_DIRS", ""), env_path),
         reasoning_effort=reasoning_effort,
         search_provider=search_provider,
+        embedding_model=values.get("JARVIS_EMBEDDING_MODEL"),
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
         search_api_key=search_api_key,
     )
