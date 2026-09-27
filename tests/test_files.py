@@ -187,3 +187,12 @@ def test_excerpt_prefers_focus_chunks() -> None:
     text = ("filler text. " * 400) + "GLASS DAMAGE: covered up to 500. " + ("more filler. " * 400)
     excerpt = _relevant_excerpt(text, "glass damage")
     assert "GLASS DAMAGE" in excerpt and len(excerpt) <= READ_CHARS + 100
+
+
+def test_narrowing_approved_folder_purges_old_entries_immediately(docs: dict[str, Path]) -> None:
+    build(docs)  # indexed the whole Documents fixture
+    narrow = docs["root"] / "Finance"
+    index = FileIndex(docs["db"], (narrow,), excluded=(docs["project"],))  # setting changed; no refresh yet
+    assert [h.name for h in index.search("budget")] == ["budget.csv"]
+    assert index.search("car insurance") == [] and index.search("tomatoes") == []  # outside: gone at once
+    assert "outside" in (index.refusal(docs["root"] / "notes.md") or "")

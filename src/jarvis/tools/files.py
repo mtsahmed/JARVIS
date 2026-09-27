@@ -61,6 +61,22 @@ class FileIndex:
             self._db.execute("CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY, name TEXT, "
                              "size INTEGER, mtime REAL)")
             self._db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5(path UNINDEXED, name, content)")
+        self._purge_disallowed()
+
+    def _purge_disallowed(self) -> None:
+        """Drop entries outside the approved folders right away (e.g. after the folder setting changed),
+        so no search can return them while the background refresh is still running."""
+        with self._lock, self._db:
+            paths = [p for (p,) in self._db.execute("SELECT path FROM files")]
+            stale = [(p,) for p in paths if not self._inside_roots(Path(p))]
+            self._db.executemany("DELETE FROM files WHERE path = ?", stale)
+            self._db.executemany("DELETE FROM files_fts WHERE path = ?", stale)
+        if stale:
+            logger.info("Removed %d index entries outside the approved folders", len(stale))
+
+    def _inside_roots(self, path: Path) -> bool:
+        return any(path.is_relative_to(r) for r in self._roots) and not any(
+            path.is_relative_to(e) for e in self._excluded)
 
     # --- rules --------------------------------------------------------------------------------
 
@@ -152,6 +168,8 @@ class FileIndex:
         hits = []
         for path_text, mtime in rows:
             path = Path(path_text)
+            if not self._inside_roots(path):  # second safety net; purge normally removed these already
+                continue
             hits.append(FileHit(path, path.name, self._display_folder(path), datetime.fromtimestamp(mtime)))
         return hits
 

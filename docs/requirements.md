@@ -23,7 +23,7 @@ A personal assistant, **primarily controlled by voice**, that runs on the owner'
 | # | Use case | Description | Access level |
 |---|---|---|---|
 | UC1 | Reminders | Create, list, and cancel reminders by voice; spoken alert plus desktop notification when due | Write (local only), auto-approved |
-| UC2 | File search | Find files by name and content in **approved folders only**; read out top results, open the chosen file on request | Read-only |
+| UC2 | File search | Find files by name and content (.txt, .md, .csv, .pdf) in the **one approved folder** `Documents\Files for JARVIS to Access` (owner decision 2026-09-28); read out top results; open (CONFIRM) or read a file's text for a question (CONFIRM: text is sent to OpenAI) | Read-only |
 | UC3 | Web search | Answer spoken questions with current web information; short spoken answer, sources shown on screen | Read-only |
 | UC4 | Email briefing | Spoken daily summary of important unread Gmail messages | Read-only (no sending in v1) |
 
@@ -79,7 +79,6 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 8 | Expansion | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
 
 ## 8. Open items
-- Which folders file search may index
 - Definition of "important" emails for the briefing
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
