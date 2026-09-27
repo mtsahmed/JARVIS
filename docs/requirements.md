@@ -36,10 +36,10 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | Speech-to-text | Local CPU: faster-whisper `base.en`, int8, beam 5 (chosen by benchmark, §9). Cloud STT not needed so far. | Free | $0 |
 | Text-to-speech (everyday replies) | Free built-in Windows voice: pyttsx3 over SAPI5 (confirmed) | Free | $0 |
 | Text-to-speech (premium) | ElevenLabs free tier (10,000 credits/month) used **only** for the daily email briefing; `eleven_flash_v2_5`, `pcm_22050` output, original volume. Voice Library voices are not available via the API on the free tier; ElevenLabs Default voices expire 2026-12-31 | Free tier; personal use only (no commercial license) | $0 |
-| Web search | Google Custom Search JSON API (existing key) | 100 queries/day free | $0 |
+| Web search | Tavily Search API (chosen 2026-09-27) | Free tier: 1,000 searches/month (per Tavily's pricing page) | $0 |
 | **Total** | | | **≤ $5/month** |
 
-**Search risk (must resolve before Phase 5 ends):** Google has closed the Custom Search JSON API to new customers and will **discontinue it on January 1, 2027**. New Programmable Search Engines are limited to specific sites (no whole-web search). Plan: (1) verify in Phase 3 that the existing key and engine can search the whole web; (2) keep search behind an adapter; (3) choose and test a replacement before December 2026.
+**Search decision (resolved 2026-09-27):** Google Custom Search JSON API was tested in Phase 3 and rejected: it is closed to new customers ("This project does not have the access to Custom Search JSON API"), only searches configured sites, and shuts down on January 1, 2027. Tavily was chosen instead (whole web, free tier, no announced shutdown). Search stays behind an adapter so the provider can change again.
 
 **Voice upgrade path:** switching all replies to ElevenLabs is a config change. At voice-first usage (~225k characters/month) this needs a paid ElevenLabs plan (Creator tier or higher). Revisit after testing.
 
@@ -73,15 +73,13 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 2 | Voice ✅ | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
 | 3 | **Tools + permissions** ← current | Reminders, file search, web search tools; permission tiers; audit log | All three tools work by voice; CONFIRM flow works by voice |
 | 4 | Memory | Persistent facts and history, semantic recall | Recalls something from a previous session |
-| 5 | Integrations & automation | Gmail read-only briefing, scheduled jobs, search replacement chosen | Morning briefing runs daily for a week |
+| 5 | Integrations & automation | Gmail read-only briefing, scheduled jobs | Morning briefing runs daily for a week |
 | 6 | Hardening & tests | Test suite, prompt-injection tests, threat review | Tests pass; injection test blocked |
 | 7 | Deployment & monitoring | Auto-start on login, health checks, backups, usage alerts | Survives reboot; alerts on failure or budget |
 | 8 | Expansion | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
 
 ## 8. Open items
 - Which folders file search may index
-- Confirm the Google Programmable Search Engine searches the whole web (not site-restricted)
-- Replacement web search provider before Dec 2026
 - Definition of "important" emails for the briefing
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date

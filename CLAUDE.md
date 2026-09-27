@@ -8,7 +8,7 @@ Jarvis is a voice-first personal assistant (Python, Windows laptop). Full requir
 - LLM: OpenAI API → `src/jarvis/llm/`
 - Speech-to-text: local model first → `src/jarvis/voice/stt/`
 - Text-to-speech: local Windows voice, ElevenLabs for premium → `src/jarvis/voice/tts/`
-- Web search: Google Custom Search JSON API (shuts down 2027-01-01, keep swappable) → `src/jarvis/tools/search/`
+- Web search: Tavily Search API (Google Custom Search was unavailable: closed to new customers, shuts down 2027-01-01; keep swappable) → `src/jarvis/tools/search/`
 - Core code must never import a provider SDK directly; only through its adapter.
 - Provider choice and model names come from config, never hardcoded.
 
