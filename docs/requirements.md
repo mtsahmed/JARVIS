@@ -1,6 +1,6 @@
 # Jarvis — Requirements (v0.3)
 
-Status: Phase 1 complete · Phase 2 implemented (latency close to target: median 3.2 s) · Last updated: 2026-09-27
+Status: Phases 1–2 complete · Phase 3 (tools + permissions) current · Last updated: 2026-09-27
 Changes from v0.2: Phase 2 measurements (§9); STT model chosen; push-to-talk key set to Right Ctrl; free disk known; open items updated.
 Changes from v0.1: voice-first interaction; providers set to OpenAI (LLM), hybrid voice (local + ElevenLabs), Google search; roadmap added.
 
@@ -70,8 +70,8 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 |---|---|---|---|
 | 0 | Requirements & environment ✅ | This document, repo, venv | Complete |
 | 1 | Text core ✅ | Config, OpenAI adapter, CLI chat, logging, usage tracking | Multi-turn chat works; tokens logged; no secrets in Git |
-| 2 | **Voice** ← current (implemented; latency follow-up open) | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
-| 3 | Tools + permissions | Reminders, file search, web search tools; permission tiers; audit log | All three tools work by voice; CONFIRM flow works by voice |
+| 2 | Voice ✅ | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
+| 3 | **Tools + permissions** ← current | Reminders, file search, web search tools; permission tiers; audit log | All three tools work by voice; CONFIRM flow works by voice |
 | 4 | Memory | Persistent facts and history, semantic recall | Recalls something from a previous session |
 | 5 | Integrations & automation | Gmail read-only briefing, scheduled jobs, search replacement chosen | Morning briefing runs daily for a week |
 | 6 | Hardening & tests | Test suite, prompt-injection tests, threat review | Tests pass; injection test blocked |
