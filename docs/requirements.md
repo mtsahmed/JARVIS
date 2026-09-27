@@ -1,6 +1,6 @@
 # Jarvis — Requirements (v0.3)
 
-Status: Phase 1 complete · Phase 2 implemented (latency target still open) · Last updated: 2026-09-27
+Status: Phase 1 complete · Phase 2 implemented (latency close to target: median 3.2 s) · Last updated: 2026-09-27
 Changes from v0.2: Phase 2 measurements (§9); STT model chosen; push-to-talk key set to Right Ctrl; free disk known; open items updated.
 Changes from v0.1: voice-first interaction; providers set to OpenAI (LLM), hybrid voice (local + ElevenLabs), Google search; roadmap added.
 
@@ -32,7 +32,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 ## 4. Providers and budget
 | Role | Provider (v1) | Cost basis | Monthly target |
 |---|---|---|---|
-| LLM (brain) | OpenAI API, cheapest model with reliable tool calling (exact model chosen in Phase 1 from current OpenAI docs) | Pay-as-you-go; $10 prepaid credit | ≤ $4 |
+| LLM (brain) | OpenAI API: `gpt-5-mini`, reasoning effort `low`, streamed (owner switched from `gpt-5-nano` for answer quality; ~5× the token price, est. < $1/month at 50 voice turns/day) | Pay-as-you-go; $10 prepaid credit | ≤ $4 |
 | Speech-to-text | Local CPU: faster-whisper `base.en`, int8, beam 5 (chosen by benchmark, §9). Cloud STT not needed so far. | Free | $0 |
 | Text-to-speech (everyday replies) | Free built-in Windows voice: pyttsx3 over SAPI5 (confirmed) | Free | $0 |
 | Text-to-speech (premium) | ElevenLabs free tier (10,000 credits/month) used **only** for the daily email briefing; `eleven_flash_v2_5`, `pcm_22050` output, original volume. Voice Library voices are not available via the API on the free tier; ElevenLabs Default voices expire 2026-12-31 | Free tier; personal use only (no commercial license) | $0 |
@@ -48,7 +48,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. Audio is processed locally when possible.
 - **Security:** Secrets live in `.env` (never committed), later the Windows Credential Manager. Google OAuth uses read-only scopes. Every tool call is written to an audit log. A key that is ever exposed gets rotated immediately.
 - **Control:** Permission tiers are AUTO (read-only / local reminders), CONFIRM (anything that sends, deletes, or modifies external data), and BLOCKED (shell commands, payments, credential access).
-- **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s, **not yet met**; see §9). Replies are short and speakable; details appear on screen.
+- **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s before streaming, **3.2 s after**; 2 of 8 live turns under 3 s; see §9). Replies are short and speakable; details appear on screen.
 - **Voice confirmations:** CONFIRM-tier actions are read back aloud and require a spoken "yes" (plus an on-screen button). Silence or unclear speech counts as "no".
 - **Reliability:** Graceful failure when offline or a provider is down; reminders still fire offline; text input always works if voice fails; if ElevenLabs quota is exhausted, fall back to the local voice.
 - **Maintainability:** Modular Python, one adapter per provider, tests for every tool.
@@ -83,7 +83,8 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - Confirm the Google Programmable Search Engine searches the whole web (not site-restricted)
 - Replacement web search provider before Dec 2026
 - Definition of "important" emails for the briefing
-- Voice latency above the 3 s target (median 4.7 s; LLM is 2.3–7.0 s of it). Planned fix: stream the LLM reply and speak the first sentence early; also test reasoning effort `minimal`
+- Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
+- Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
 - Re-record the STT benchmark manually (`scripts/benchmark_stt.py record`) for cleaner accuracy numbers; the timed hands-free recording added errors
 
@@ -108,9 +109,22 @@ WER is inflated by the hands-free recording (all models agree on the same mishea
 |---|---|---|
 | STT latency | 0.87–1.15 s | — |
 | LLM latency | 2.3–7.0 s (median ~3.6 s) | — |
-| End of speech → reply starts | min 3.3 s, median 4.7 s, max 7.9 s | < 3 s ❌ |
+| End of speech → reply starts | min 3.3 s, median 4.7 s, max 7.9 s | < 3 s ❌ (before streaming) |
 | Process RAM | 306–309 MB | < 500 MB ✅ |
 | Errors / TTS fallbacks | 0 / 0 | — |
 | LLM tokens (9 turns) | 9,300 total, 2,560 reasoning (≈ $0.004) | — |
 | ElevenLabs premium voice | ~3.5–4.6 s before audio starts | briefing only |
+
+**After streaming + voice fixes** (8 live turns, `gpt-5-mini`, reasoning `low`, voice instructions, 2026-09-27):
+
+| Metric | Result | Target |
+|---|---|---|
+| STT latency | 0.78–0.98 s (after hallucination filter) | — |
+| LLM latency (full reply, streamed) | 2.0–4.3 s | — |
+| End of speech → first words | min 2.8 s, **median 3.2 s**, max 5.3 s (2 of 8 under 3 s) | < 3 s ⚠️ close |
+| Process RAM | 303–304 MB | < 500 MB ✅ |
+| Errors / TTS fallbacks | 0 / 0 | — |
+| Reply length | 1–2 spoken sentences, 96–231 output tokens (64–128 reasoning) | short ✅ |
+
+Changes: LLM reply streamed and spoken sentence by sentence; voice-only instructions (1–3 plain sentences, no lists/markdown, state knowledge date for changing facts); markdown stripped before speech; STT drops repetitive/silent segments and filler-only transcripts; spoken "reset" / "new conversation" clears history.
 
