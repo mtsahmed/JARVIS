@@ -299,3 +299,16 @@ def test_is_yes_only_for_clear_yes() -> None:
 
     assert is_yes("Yes.") and is_yes("Go ahead") and is_yes("Yeah sure")
     assert not is_yes("") and not is_yes("okay") and not is_yes("Yes, no wait") and not is_yes("I'm not sure")
+
+
+def test_queued_reminder_spoken_between_turns() -> None:
+    alerts: queue.Queue[str] = queue.Queue()
+    speaker = FakeSpeaker()
+    session = ChatSession(FakeLLM(), history_turns=5, usage_sink=lambda r: None)
+    loop = VoiceLoop(session, FakeSTT(), speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+                     max_record_seconds=5, usage_sink=lambda r: None, alerts=alerts)
+    alerts.put("Reminder: stretch")
+    loop.speak_alerts()
+    assert speaker.spoken == ["Reminder: stretch"]
+    loop.speak_alerts()  # nothing left
+    assert speaker.spoken == ["Reminder: stretch"]

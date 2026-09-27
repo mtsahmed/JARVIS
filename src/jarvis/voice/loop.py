@@ -99,7 +99,9 @@ class VoiceLoop:
         drain: Callable[[], None],
         max_record_seconds: float,
         usage_sink: Callable[[dict[str, Any]], None] = log_usage,
+        alerts: queue.Queue[str] | None = None,
     ) -> None:
+        self._alerts = alerts  # e.g. due reminders; spoken only while Jarvis is idle
         self._session = session
         self._stt = stt
         self._speaker = speaker
@@ -112,7 +114,11 @@ class VoiceLoop:
     def run(self) -> None:
         """Loop until Ctrl+C."""
         while True:
-            if self._next_event() != "start":
+            event = self._next_event(timeout=1.0)
+            if event is None:
+                self.speak_alerts()
+                continue
+            if event != "start":
                 continue
             samples = self._record()
             if samples is not None:
@@ -122,7 +128,18 @@ class VoiceLoop:
                     logger.exception("Unexpected error during voice turn")
                     print("[error] Something went wrong. Details are in logs/jarvis.log.")
             self._drain()  # ignore key presses made while Jarvis was busy
+            self.speak_alerts()
             print("\n(hold the key to talk)")
+
+    def speak_alerts(self) -> None:
+        """Say any queued alerts, between turns only, so they never interrupt a reply."""
+        while self._alerts is not None:
+            try:
+                text = self._alerts.get_nowait()
+            except queue.Empty:
+                return
+            print(f"\n[reminder] {text}")
+            self._say(text)
 
     def _next_event(self, timeout: float | None = None) -> str | None:
         deadline = None if timeout is None else time.monotonic() + timeout

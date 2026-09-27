@@ -25,6 +25,9 @@ dependencies = [
     "pynput>=1.8,<2",
     # psutil: process RAM measurement for the STT benchmark and voice-turn metrics.
     "psutil>=7,<8",
+    # windows-toasts: desktop notifications for due reminders (Apache-2.0; only 5 WinRT packages);
+    # imported only in src/jarvis/integrations/notify.py.
+    "windows-toasts>=1.3,<2",
 ]
 
 [project.optional-dependencies]

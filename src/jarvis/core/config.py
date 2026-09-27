@@ -24,6 +24,7 @@ _KEYS = (
     "JARVIS_LLM_TIMEOUT_SECONDS",
     "JARVIS_HISTORY_TURNS",
     "JARVIS_REASONING_EFFORT",
+    "JARVIS_DATA_DIR",
 )
 
 # Secret key required for each supported LLM provider.
@@ -47,6 +48,7 @@ class Config:
     history_turns: int
     project_root: Path
     logs_dir: Path
+    data_dir: Path  # local databases (reminders, ...); gitignored
     # None = do not send; the provider uses its default.
     reasoning_effort: str | None
     # repr=False keeps the key out of repr()/str(), and therefore out of logs.
@@ -87,6 +89,11 @@ def _positive_number(values: dict[str, str], key: str, env_path: Path, kind: typ
     return number
 
 
+def _resolve_dir(value: str, project_root: Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else project_root / path
+
+
 def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> Config:
     """Build a validated Config. Raises ConfigError with a clear message on problems."""
     env_path = env_path or project_root / ".env"
@@ -110,6 +117,7 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         history_turns=int(_positive_number(values, "JARVIS_HISTORY_TURNS", env_path, int)),
         project_root=project_root,
         logs_dir=project_root / "logs",
+        data_dir=_resolve_dir(values.get("JARVIS_DATA_DIR", "data"), project_root),
         reasoning_effort=reasoning_effort,
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
     )
@@ -175,9 +183,7 @@ def load_voice_config(env_path: Path | None = None, project_root: Path = PROJECT
     env_path = env_path or project_root / ".env"
     values = _read_values(env_path, _VOICE_KEYS)
 
-    data_dir = Path(values.get("JARVIS_DATA_DIR", "data"))
-    if not data_dir.is_absolute():
-        data_dir = project_root / data_dir
+    data_dir = _resolve_dir(values.get("JARVIS_DATA_DIR", "data"), project_root)
 
     tts_rate = None
     if "JARVIS_TTS_RATE" in values:

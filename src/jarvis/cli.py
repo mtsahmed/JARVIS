@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import argparse
 import logging
+import queue
 import sys
 
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
+from jarvis.core.scheduler import ReminderScheduler
 from jarvis.llm.base import LLMAdapter, LLMError
 from jarvis.llm.factory import create_llm
 from jarvis.tools.registry import ToolRegistry
+from jarvis.tools.reminders import Reminder, ReminderStore, describe_when, local_now, reminder_tools
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +33,34 @@ class TextConfirmer:
         return answer in ("y", "yes")
 
 
-def build_tools() -> ToolRegistry:
+def build_tools(store: ReminderStore) -> ToolRegistry:
     """All tools Jarvis may use. Each declares its permission tier."""
-    return ToolRegistry([])
+    return ToolRegistry(reminder_tools(store))
+
+
+class ReminderAlerts:
+    """Announces due reminders: desktop notification, plus the terminal (text mode) or voice (voice mode)."""
+
+    def __init__(self) -> None:
+        self.voice_queue: queue.Queue[str] | None = None  # set when voice mode starts
+        try:
+            from jarvis.integrations.notify import WindowsNotifier
+
+            self._notifier: object | None = WindowsNotifier()
+        except Exception as e:  # notifications are optional; reminders still print/speak
+            logger.error("Desktop notifications unavailable: %s", type(e).__name__)
+            self._notifier = None
+
+    def __call__(self, reminder: Reminder, missed: bool) -> None:
+        message = reminder.text
+        if missed:
+            message = f"Missed reminder from {describe_when(reminder.due, local_now())}: {reminder.text}"
+        if self._notifier is not None:
+            self._notifier.notify("Jarvis reminder", message)  # type: ignore[attr-defined]
+        if self.voice_queue is not None:
+            self.voice_queue.put(f"Reminder: {message}" if not missed else message)
+        else:
+            print(f"\n[reminder] {message}\nyou> ", end="", flush=True)
 
 
 def main() -> int:
@@ -54,15 +82,22 @@ def main() -> int:
     except LLMError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
-    if args.voice and run_voice(config, llm):
-        logger.info("Jarvis stopped")
-        return 0
-    run_text(config, ChatSession(llm, history_turns=config.history_turns, tools=build_tools()))
+
+    store = ReminderStore(config.data_dir / "jarvis.db")
+    alerts = ReminderAlerts()
+    scheduler = ReminderScheduler(store, alerts)
+    try:
+        if not (args.voice and run_voice(config, llm, store, alerts, scheduler)):
+            scheduler.start()
+            run_text(config, ChatSession(llm, history_turns=config.history_turns, tools=build_tools(store)))
+    finally:
+        scheduler.stop()
     logger.info("Jarvis stopped")
     return 0
 
 
-def run_voice(config: Config, llm: LLMAdapter) -> bool:
+def run_voice(config: Config, llm: LLMAdapter, store: ReminderStore, alerts: ReminderAlerts,
+              scheduler: ReminderScheduler) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -87,10 +122,12 @@ def run_voice(config: Config, llm: LLMAdapter) -> bool:
         return False
 
     session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS,
-                          tools=build_tools())
+                          tools=build_tools(store))
+    alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
-                     hotkey.drain, voice.max_record_seconds)
+                     hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue)
     hotkey.start()
+    scheduler.start()
     print(f"Jarvis voice mode ({config.llm_model}, {voice.stt_model}). "
           f"Hold {voice.ptt_key.upper()} and speak; release to send. Ctrl+C quits.")
     try:
