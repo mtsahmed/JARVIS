@@ -131,6 +131,7 @@ _VOICE_KEYS = (
     "JARVIS_STT_MODEL",
     "JARVIS_STT_COMPUTE_TYPE",
     "JARVIS_STT_BEAM_SIZE",
+    "JARVIS_STT_FALLBACK_MODEL",
     "JARVIS_TTS_PROVIDER",
     "JARVIS_TTS_RATE",
     "JARVIS_PTT_KEY",
@@ -142,7 +143,7 @@ _VOICE_KEYS = (
     "JARVIS_ELEVENLABS_MIN_CHARS",
 )
 
-_STT_PROVIDERS = ("faster-whisper",)
+_STT_PROVIDERS = ("faster-whisper", "openai")
 _TTS_PROVIDERS = ("sapi",)
 # What ElevenLabs may be used for; everything else uses the local voice.
 _ELEVENLABS_PURPOSES = ("briefing", "reply")
@@ -156,6 +157,8 @@ class VoiceConfig:
     stt_model: str
     stt_compute_type: str
     stt_beam_size: int
+    # Local faster-whisper model used when a cloud STT provider fails or is offline; None = no fallback.
+    stt_fallback_model: str | None
     tts_provider: str
     tts_rate: int | None  # None = SAPI default speed
     ptt_key: str
@@ -212,6 +215,7 @@ def load_voice_config(env_path: Path | None = None, project_root: Path = PROJECT
         stt_model=_require(values, "JARVIS_STT_MODEL", env_path),
         stt_compute_type=_require(values, "JARVIS_STT_COMPUTE_TYPE", env_path),
         stt_beam_size=int(_positive_number(values, "JARVIS_STT_BEAM_SIZE", env_path, int)),
+        stt_fallback_model=values.get("JARVIS_STT_FALLBACK_MODEL"),
         tts_provider=_choice(values, "JARVIS_TTS_PROVIDER", env_path, _TTS_PROVIDERS),
         tts_rate=tts_rate,
         ptt_key=_require(values, "JARVIS_PTT_KEY", env_path).lower(),

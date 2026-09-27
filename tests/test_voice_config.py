@@ -85,3 +85,14 @@ def test_unknown_provider_rejected(tmp_path: Path, key: str, value: str) -> None
 def test_missing_stt_model_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="JARVIS_STT_MODEL"):
         load(tmp_path, VOICE_ENV.replace("JARVIS_STT_MODEL=base.en\n", ""))
+
+
+def test_cloud_stt_with_local_fallback(tmp_path: Path) -> None:
+    env = VOICE_ENV.replace("JARVIS_STT_PROVIDER=faster-whisper", "JARVIS_STT_PROVIDER=openai")
+    env = env.replace("JARVIS_STT_MODEL=base.en", "JARVIS_STT_MODEL=gpt-4o-mini-transcribe\nJARVIS_STT_FALLBACK_MODEL=base.en")
+    cfg = load(tmp_path, env)
+    assert (cfg.stt_provider, cfg.stt_model, cfg.stt_fallback_model) == ("openai", "gpt-4o-mini-transcribe", "base.en")
+
+
+def test_fallback_model_optional(tmp_path: Path) -> None:
+    assert load(tmp_path).stt_fallback_model is None

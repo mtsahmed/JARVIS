@@ -33,7 +33,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | Role | Provider (v1) | Cost basis | Monthly target |
 |---|---|---|---|
 | LLM (brain) | OpenAI API: `gpt-5-mini`, reasoning effort `low`, streamed (owner switched from `gpt-5-nano` for answer quality; ~5× the token price, est. < $1/month at 50 voice turns/day) | Pay-as-you-go; $10 prepaid credit | ≤ $4 |
-| Speech-to-text | Local CPU: faster-whisper `base.en`, int8, beam 5 (chosen by benchmark, §9). Cloud STT not needed so far. | Free | $0 |
+| Speech-to-text | Cloud: OpenAI `gpt-4o-mini-transcribe` (owner decision 2026-09-28, §9), with local faster-whisper `base.en` as automatic fallback when offline or on errors | $0.003/minute (~$0.40/month at 50 turns/day) | ≤ $1 |
 | Text-to-speech (everyday replies) | Free built-in Windows voice: pyttsx3 over SAPI5 (confirmed) | Free | $0 |
 | Text-to-speech (premium) | ElevenLabs free tier (10,000 credits/month) used **only** for the daily email briefing; `eleven_flash_v2_5`, `pcm_22050` output, original volume. Voice Library voices are not available via the API on the free tier; ElevenLabs Default voices expire 2026-12-31 | Free tier; personal use only (no commercial license) | $0 |
 | Web search | Tavily Search API (chosen 2026-09-27) | Free tier: 1,000 searches/month (per Tavily's pricing page) | $0 |
@@ -45,7 +45,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 
 ## 5. Non-functional requirements
 - **Cost controls:** A spending/usage limit is set on every provider account. Output tokens are capped, conversation history is trimmed, and token usage and ElevenLabs characters are logged per request. Jarvis warns when monthly usage passes 80% of any limit.
-- **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. Audio is processed locally when possible.
+- **Privacy:** Only the text needed for a task is sent to any provider. File contents are sent only when the user asks about them. Email bodies are summarized, never stored in full. **Audio:** push-to-talk recordings are sent to OpenAI for transcription (owner decision 2026-09-28: 10/10 commands correct vs 6/10 locally); they are not stored by Jarvis, and local transcription is used when offline.
 - **Security:** Secrets live in `.env` (never committed), later the Windows Credential Manager. Google OAuth uses read-only scopes. Every tool call is written to an audit log. A key that is ever exposed gets rotated immediately.
 - **Control:** Permission tiers are AUTO (read-only / local reminders), CONFIRM (anything that sends, deletes, or modifies external data), and BLOCKED (shell commands, payments, credential access).
 - **Voice:** Push-to-talk (hotkey) first; a wake word is optional later. Target is under 3 s from end of speech to start of reply (measured 2026-09-27: median 4.7 s before streaming, **3.2 s after**; 2 of 8 live turns under 3 s; see §9). Replies are short and speakable; details appear on screen.
@@ -84,7 +84,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
-- Re-record the STT benchmark manually (`scripts/benchmark_stt.py record`) for cleaner accuracy numbers; the timed hands-free recording added errors
+- Optional: if a hanging network makes offline voice turns slow (cloud STT timeout 15 s), skip the cloud for a few minutes after a failure
 
 ## 9. Measurements (Phase 2, 2026-09-27)
 
@@ -125,4 +125,13 @@ WER is inflated by the hands-free recording (all models agree on the same mishea
 | Reply length | 1–2 spoken sentences, 96–231 output tokens (64–128 reasoning) | short ✅ |
 
 Changes: LLM reply streamed and spoken sentence by sentence; voice-only instructions (1–3 plain sentences, no lists/markdown, state knowledge date for changing facts); markdown stripped before speech; STT drops repetitive/silent segments and filler-only transcripts; spoken "reset" / "new conversation" clears history.
+
+**STT on real commands** (10 command phrases recorded manually by the owner, `scripts/benchmark_stt.py`, 2026-09-28):
+
+| Model | Exact | Avg WER | Avg / max latency | Process RAM |
+|---|---|---|---|---|
+| `base.en` (local, beam 5, vocabulary priming) | 6/10 | 16% | 1.03 / 1.15 s | 336 MB |
+| **`gpt-4o-mini-transcribe`** (cloud) — chosen | **10/10** | **0%** | 1.06 / 2.81 s | 80 MB |
+
+Local errors were on non-reminder commands ("Open" → "On", "car insurance" → "card and show them", "What's the weather" → "Or see whether I'm"). Vocabulary priming fixed "cancel" (was heard as "cancer"). Fallback verified: with the cloud failing after a reminder notification had loaded WinRT, the local model loaded and transcribed correctly (first fallback turn 3.1 s including model load; RSS 309 MB); with the cloud working, RSS is ~120 MB.
 

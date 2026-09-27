@@ -109,8 +109,12 @@ def run_voice(config: Config, llm: LLMAdapter, store: ReminderStore, alerts: Rem
     try:
         voice = load_voice_config()
         setup_logging(config.logs_dir, secrets=(*config.secrets, *voice.secrets))
-        print(f"Loading speech model {voice.stt_model}...")
-        stt = create_stt(voice)
+        if voice.stt_provider == "openai":
+            fallback = f", local fallback {voice.stt_fallback_model}" if voice.stt_fallback_model else ""
+            print(f"Speech recognition: {voice.stt_model} (cloud){fallback}")
+        else:
+            print(f"Loading speech model {voice.stt_model}...")
+        stt = create_stt(voice, api_key=config.llm_api_key)
         speaker = create_speaker(voice, purpose="reply")
         hotkey = HotkeyListener(voice.ptt_key)
     except (ConfigError, STTError, TTSError, AudioError, ValueError) as e:
