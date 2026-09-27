@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -30,8 +31,20 @@ VOICE_INSTRUCTIONS = (
     "Answer in one to three short sentences of plain spoken English. "
     "Never use lists, bullet points, headings, markdown, emojis, URLs, or special symbols. "
     "If the request is unclear, ask one short question. "
-    "If a full answer would be long, give the key point and offer to say more."
+    "If a full answer would be long, give the key point and offer to say more. "
+    "You cannot look up live or recent information yet. For prices, market values, news, or other facts "
+    "that change over time, say that briefly, then give the most recent information you know and roughly "
+    "when it is from, and suggest checking a live source."
 )
+
+# Saying one of these (and nothing else) starts a new conversation, like /reset in text mode.
+RESET_PHRASES = frozenset({"reset", "new conversation", "start over", "start a new conversation", "clear history"})
+
+# Speech recognition can turn background noise into strings of filler words. A short "yes" or
+# "okay" can be a real answer to Jarvis's question, so only longer all-filler transcripts are dropped.
+_FILLER_WORDS = frozenset({"okay", "ok", "all", "right", "alright", "yeah", "yes", "yep", "um", "uh", "hmm",
+                           "mm", "oh", "ah", "so", "well", "like", "you", "know"})
+_MIN_FILLER_RUN = 4
 _POLL_SECONDS = 0.2  # queue waits time out regularly so Ctrl+C works on Windows
 
 
@@ -118,11 +131,16 @@ class VoiceLoop:
         self._usage_sink({"kind": "stt", "model": self._stt.model, "audio_seconds": round(audio_seconds, 2),
                           "latency_ms": stt_ms})
 
-        if not transcript.text:
-            print("(didn't catch that)")
+        if not transcript.text or is_filler_only(transcript.text):
+            print(f"(didn't catch that{': ' + transcript.text if transcript.text else ''})")
             self._say("Sorry, I didn't catch that.")
             return
         print(f"you said> {transcript.text}")
+        if is_reset_request(transcript.text):
+            self._session.reset()
+            print("(history cleared)")
+            self._say("Okay, starting a new conversation.")
+            return
 
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
         # is complete, so Jarvis starts talking while the rest of the reply is still being written.
@@ -195,6 +213,22 @@ class VoiceLoop:
             self._speaker.speak(text)
         except TTSError as e:
             print(f"[voice error] {e}")
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z']+", text.lower())
+
+
+def is_filler_only(text: str) -> bool:
+    words = _words(text)
+    return len(words) >= _MIN_FILLER_RUN and all(w in _FILLER_WORDS for w in words)
+
+
+def is_reset_request(text: str) -> bool:
+    words = _words(text)
+    if words[:1] == ["jarvis"]:
+        words = words[1:]
+    return " ".join(words) in RESET_PHRASES
 
 
 def _ms_since(started: float) -> int:

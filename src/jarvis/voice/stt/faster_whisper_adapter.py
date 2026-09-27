@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from faster_whisper import WhisperModel
+from faster_whisper.transcribe import Segment
 
 from jarvis.voice.stt.base import STTError, Transcript
 
@@ -48,11 +49,34 @@ class FasterWhisperAdapter:
             return Transcript("", 0.0)
         try:
             segments, _info = self._model.transcribe(
-                samples, language="en", beam_size=self._beam_size, vad_filter=True
+                samples,
+                language="en",
+                beam_size=self._beam_size,
+                vad_filter=True,
+                # Library docs: False makes the model "less prone to getting stuck in a failure loop,
+                # such as repetition looping". Each push-to-talk clip is independent anyway.
+                condition_on_previous_text=False,
             )
             # segments is a generator; transcription happens while iterating.
-            text = " ".join(segment.text.strip() for segment in segments).strip()
+            text = " ".join(s.text.strip() for s in segments if not _looks_hallucinated(s)).strip()
         except Exception as e:
             logger.error("Transcription failed: %s", type(e).__name__)
             raise STTError("Speech recognition failed. Please try again.") from None
         return Transcript(text, audio_seconds)
+
+
+# The library's own defaults for "failed" and "silent" segments (transcribe() docstring).
+_MAX_COMPRESSION_RATIO = 2.4
+_NO_SPEECH_PROB = 0.6
+_MIN_AVG_LOGPROB = -1.0
+
+
+def _looks_hallucinated(segment: Segment) -> bool:
+    """Drop segments that are repetitive, or likely silence the model 'heard' words in."""
+    if segment.compression_ratio > _MAX_COMPRESSION_RATIO:
+        logger.info("Dropped repetitive speech segment (compression ratio %.2f)", segment.compression_ratio)
+        return True
+    if segment.no_speech_prob > _NO_SPEECH_PROB and segment.avg_logprob < _MIN_AVG_LOGPROB:
+        logger.info("Dropped likely-silent speech segment")
+        return True
+    return False

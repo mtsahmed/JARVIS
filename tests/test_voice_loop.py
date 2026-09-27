@@ -180,3 +180,40 @@ def test_voice_instructions_ask_for_short_plain_speech() -> None:
     from jarvis.voice.loop import VOICE_INSTRUCTIONS
 
     assert "spoken aloud" in VOICE_INSTRUCTIONS and "Never use lists" in VOICE_INSTRUCTIONS
+
+
+def test_filler_only_transcript_treated_as_not_understood() -> None:
+    loop, _, llm, speaker, _ = make(stt=FakeSTT("Okay. Okay. All right. Okay. Yeah. All right."))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert llm.calls == 0
+    assert speaker.spoken == ["Sorry, I didn't catch that."]
+
+
+def test_short_yes_still_reaches_llm() -> None:
+    loop, _, llm, _, _ = make(stt=FakeSTT("Yes."))
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert llm.calls == 1
+
+
+def test_spoken_reset_clears_history_without_llm() -> None:
+    loop, stt, llm, speaker, _ = make()
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert loop._session.history  # one turn remembered
+    loop._stt = FakeSTT("Jarvis, new conversation.")
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert loop._session.history == ()
+    assert llm.calls == 1
+    assert speaker.spoken[-1] == "Okay, starting a new conversation."
+
+
+def test_reset_word_inside_a_request_is_not_a_reset() -> None:
+    from jarvis.voice.loop import is_reset_request
+
+    assert is_reset_request("Start over!")
+    assert not is_reset_request("Reset my alarm to seven")
+
+
+def test_voice_instructions_cover_live_data() -> None:
+    from jarvis.voice.loop import VOICE_INSTRUCTIONS
+
+    assert "cannot look up live" in VOICE_INSTRUCTIONS
