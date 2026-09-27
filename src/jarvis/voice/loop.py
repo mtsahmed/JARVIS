@@ -59,6 +59,17 @@ _YES_PHRASES = ("go ahead", "do it")
 _NO_WORDS = frozenset({"no", "not", "don't", "dont", "cancel", "stop", "wait", "never", "nope"})
 
 
+SEARCH_ACK = "Let me check."
+_ACK_TOOLS = frozenset({"web_search"})  # slow tools: say something so the user isn't left in silence
+
+
+@dataclass(frozen=True)
+class Ack:
+    """A short filler phrase (e.g. while searching). Spoken, but not counted as the answer in metrics."""
+
+    text: str
+
+
 @dataclass
 class ConfirmRequest:
     """Sent from the LLM worker thread to the main thread, which asks the user by voice."""
@@ -196,7 +207,7 @@ class VoiceLoop:
 
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
         # is complete, so Jarvis starts talking while the rest of the reply is still being written.
-        sentences: queue.Queue[str | ConfirmRequest | None] = queue.Queue()
+        sentences: queue.Queue[str | Ack | ConfirmRequest | None] = queue.Queue()
         outcome: dict[str, Any] = {}
         worker = threading.Thread(target=self._stream_reply, args=(transcript.text, sentences, outcome), daemon=True)
         worker.start()
@@ -204,6 +215,10 @@ class VoiceLoop:
         until_speak_ms: int | None = None
         spoken = 0
         while (raw := self._next_sentence(sentences)) is not None:
+            if isinstance(raw, Ack):
+                print(f"jarvis> {raw.text}")
+                self._say(raw.text)
+                continue
             if isinstance(raw, ConfirmRequest):
                 if spoken:
                     print()
@@ -267,13 +282,21 @@ class VoiceLoop:
         self._say("Okay." if approved else "Okay, I won't.")
         return approved
 
-    def _stream_reply(self, text: str, sentences: queue.Queue[str | ConfirmRequest | None], outcome: dict[str, Any]) -> None:
+    def _stream_reply(self, text: str, sentences: queue.Queue[str | Ack | ConfirmRequest | None], outcome: dict[str, Any]) -> None:
         """Worker thread: stream the LLM reply and queue complete sentences. Always ends with None."""
         splitter = SentenceSplitter()
         started = time.perf_counter()
+        acked = False
+
+        def on_tool_start(name: str) -> None:
+            nonlocal acked
+            if name in _ACK_TOOLS and not acked:  # once per question, even if the model searches twice
+                acked = True
+                sentences.put(Ack(SEARCH_ACK))
+
         try:
             self._session.ask(text, on_text=lambda piece: [sentences.put(s) for s in splitter.feed(piece)],
-                              confirmer=_QueueConfirmer(sentences))
+                              confirmer=_QueueConfirmer(sentences), on_tool_start=on_tool_start)
             if rest := splitter.flush():
                 sentences.put(rest)
         except Exception as e:  # handed to the main thread
@@ -283,7 +306,7 @@ class VoiceLoop:
             sentences.put(None)
 
     @staticmethod
-    def _next_sentence(sentences: queue.Queue[str | ConfirmRequest | None]) -> str | ConfirmRequest | None:
+    def _next_sentence(sentences: queue.Queue[str | Ack | ConfirmRequest | None]) -> str | Ack | ConfirmRequest | None:
         while True:
             try:
                 return sentences.get(timeout=_POLL_SECONDS)  # timeout keeps Ctrl+C responsive on Windows

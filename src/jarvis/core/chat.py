@@ -58,11 +58,13 @@ class ChatSession:
         text: str,
         on_text: Callable[[str], None] | None = None,
         confirmer: Confirmer | None = None,
+        on_tool_start: Callable[[str], None] | None = None,
     ) -> LLMReply:
         """Send one user message with recent history. Raises LLMError on provider failure.
 
         `on_text` (optional) receives the reply in pieces as it streams in.
         `confirmer` asks the user before CONFIRM-tier tools run (without one, they are declined).
+        `on_tool_start` (optional) is told the name of each tool just before it runs.
         """
         messages = [*self._history[-self._max_messages :], Message("user", text)]
         # The model has no clock; it needs "now" to resolve "tomorrow at 6" and similar.
@@ -76,7 +78,7 @@ class ChatSession:
                 instructions,
                 on_text=on_text,
                 tools=tools.specs() if tools else (),
-                run_tool=(lambda name, args: tools.run(name, args, confirmer)) if tools else None,
+                run_tool=(lambda name, args: tools.run(name, args, confirmer, on_tool_start)) if tools else None,
             )
         except LLMError:
             self._record_usage(None, started, status="error")

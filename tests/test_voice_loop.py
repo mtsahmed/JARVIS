@@ -314,3 +314,44 @@ def test_queued_reminder_spoken_between_turns() -> None:
     assert speaker.spoken == ["Reminder: stretch"]
     loop.speak_alerts()  # nothing left
     assert speaker.spoken == ["Reminder: stretch"]
+
+
+class SearchingLLM(FakeLLM):
+    """Runs web_search (twice) through run_tool, then answers."""
+
+    def generate(self, messages, instructions=None, on_text=None, tools=(), run_tool=None):  # type: ignore[no-untyped-def]
+        run_tool("web_search", '{"query": "weather", "topic": "general"}')
+        run_tool("web_search", '{"query": "weather again", "topic": "general"}')
+        on_text("It is sunny today. ")
+        return LLMReply(text="It is sunny today.", model="fake", usage=None, tool_calls=2)
+
+
+def make_searching(tool_tier_auto: bool = True):  # type: ignore[no-untyped-def]
+    from jarvis.tools.base import Tier, Tool
+    from jarvis.tools.registry import ToolRegistry
+
+    schema = {"type": "object", "properties": {"query": {"type": "string"}, "topic": {"type": "string"}},
+              "required": ["query", "topic"], "additionalProperties": False}
+    registry = ToolRegistry([Tool("web_search", "search", schema, Tier.AUTO, handler=lambda a: "results")],
+                            audit_sink=lambda r: None)
+    records: list[dict[str, Any]] = []
+    session = ChatSession(SearchingLLM(), history_turns=5, usage_sink=lambda r: None, tools=registry)
+    speaker = FakeSpeaker()
+    loop = VoiceLoop(session, FakeSTT("weather?"), speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+                     max_record_seconds=5, usage_sink=records.append)
+    return loop, speaker, records
+
+
+def test_let_me_check_said_once_before_search_answer() -> None:
+    from jarvis.voice.loop import SEARCH_ACK
+
+    loop, speaker, records = make_searching()
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert speaker.spoken == [SEARCH_ACK, "It is sunny today."]  # once, although it searched twice
+    assert records[-1]["sentences"] == 1  # the filler is not counted as the answer
+
+
+def test_no_filler_without_search() -> None:
+    loop, _, _, speaker, _ = make()
+    loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
+    assert "Let me check." not in speaker.spoken

@@ -42,7 +42,8 @@ class ToolRegistry:
         """Tools offered to the model. BLOCKED tools are never offered."""
         return [ToolSpec(t.name, t.description, t.parameters) for t in self._tools.values() if t.tier is not Tier.BLOCKED]
 
-    def run(self, name: str, arguments: str, confirmer: Confirmer | None = None) -> str:
+    def run(self, name: str, arguments: str, confirmer: Confirmer | None = None,
+            on_start: Callable[[str], None] | None = None) -> str:
         """Execute one tool call and return text for the model. Never raises."""
         started = time.perf_counter()
         tool = self._tools.get(name)
@@ -77,6 +78,8 @@ class ToolRegistry:
                 if remembered is not None:
                     self._approved.add(remembered)
 
+        if on_start is not None:
+            on_start(name)  # permission granted and the tool is about to run (e.g. voice says "Let me check.")
         try:
             result = tool.handler(args)
             status = "ok"

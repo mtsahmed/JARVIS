@@ -190,3 +190,13 @@ def test_tools_without_remember_key_always_ask() -> None:
     registry.run("open_file", json.dumps({"path": "a.txt"}), answer)
     registry.run("open_file", json.dumps({"path": "a.txt"}), answer)
     assert len(answer.asked) == 2
+
+
+def test_on_start_called_only_when_tool_actually_runs() -> None:
+    ran: list[str] = []
+    started: list[str] = []
+    registry, _ = make(auto(), confirm_tool(ran))
+    registry.run("auto_tool", "{}", on_start=started.append)
+    registry.run("open_file", json.dumps({"path": "a.txt"}), Answer(yes=False), on_start=started.append)
+    registry.run("nope", "{}", on_start=started.append)
+    assert started == ["auto_tool"]  # not for declined or unknown tools
