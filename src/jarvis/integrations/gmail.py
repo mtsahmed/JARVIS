@@ -139,8 +139,8 @@ class GmailClient:
             logger.warning("Saving Google sign-in to a file instead: %s", e)
             self._token_file.parent.mkdir(parents=True, exist_ok=True)
             self._token_file.write_text(credentials.to_json(), encoding="utf-8")
-            return
-        self._token_file.unlink(missing_ok=True)  # an old plain-text token file is no longer needed
+        # An old plain-text token file is left alone (owner decision: plain-text copies are only removed
+        # by `jarvis --secrets import` after confirmation). Jarvis reads the vault first, so it is unused.
 
     @staticmethod
     def _get(session: AuthorizedSession, url: str, params: dict[str, Any]) -> dict[str, Any]:

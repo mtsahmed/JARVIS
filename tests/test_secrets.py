@@ -123,7 +123,7 @@ def test_set_prompts_hidden_and_enter_keeps_current(isolated_secret_store: Memor
 # --- Gmail sign-in kept in the vault ---------------------------------------------------------------
 
 
-def test_gmail_client_config_from_vault_and_save_removes_token_file(tmp_path: Path, isolated_secret_store: MemoryStore) -> None:
+def test_gmail_client_config_from_vault_and_save_keeps_old_token_file(tmp_path: Path, isolated_secret_store: MemoryStore) -> None:
     from jarvis.integrations.gmail import AUTH_URI, TOKEN_URI, GmailClient
 
     token_file = tmp_path / "google_token.json"
@@ -138,7 +138,8 @@ def test_gmail_client_config_from_vault_and_save_removes_token_file(tmp_path: Pa
         refresh_token, client_id, client_secret = "1//new-refresh", "cid", "sec"
 
     client._save(FakeCreds())  # type: ignore[arg-type]
-    assert isolated_secret_store.get("GOOGLE_REFRESH_TOKEN") == "1//new-refresh" and not token_file.exists()
+    assert isolated_secret_store.get("GOOGLE_REFRESH_TOKEN") == "1//new-refresh"
+    assert token_file.read_text(encoding="utf-8") == "{}"  # never deleted or rewritten automatically
 
 
 def test_windows_store_refuses_oversized_secret() -> None:
