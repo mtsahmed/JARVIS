@@ -35,6 +35,9 @@ _KEYS = (
     "JARVIS_GMAIL_CLIENT_FILE",
     "JARVIS_GMAIL_TOKEN_FILE",
     "JARVIS_BRIEFING_TIME",
+    "JARVIS_MONTHLY_BUDGET_USD",
+    "JARVIS_BUDGET_WARN_PERCENT",
+    "JARVIS_PRICES_FILE",
 )
 
 # Secret key required for each supported LLM provider.
@@ -71,6 +74,9 @@ class Config:
     gmail_client_file: Path
     gmail_token_file: Path
     briefing_time: time | None  # daily briefing (local time); None = no scheduled briefing
+    monthly_budget_usd: float  # total monthly budget for budget alerts (owner: $5)
+    budget_warn_percent: float  # warn when the month's estimated spend passes this share (owner: 80)
+    prices_file: Path  # prices used to estimate OpenAI spend (with source and date)
     # repr=False keeps the keys out of repr()/str(), and therefore out of logs.
     llm_api_key: str = field(repr=False)
     search_api_key: str | None = field(default=None, repr=False)
@@ -193,6 +199,11 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         gmail_client_file=_resolve_dir(values.get("JARVIS_GMAIL_CLIENT_FILE", "data/google_client.json"), project_root),
         gmail_token_file=_resolve_dir(values.get("JARVIS_GMAIL_TOKEN_FILE", "data/google_token.json"), project_root),
         briefing_time=_clock_time(values.get("JARVIS_BRIEFING_TIME", ""), env_path),
+        monthly_budget_usd=float(_positive_number({"JARVIS_MONTHLY_BUDGET_USD": "5", **values},
+                                                  "JARVIS_MONTHLY_BUDGET_USD", env_path, float)),
+        budget_warn_percent=float(_positive_number({"JARVIS_BUDGET_WARN_PERCENT": "80", **values},
+                                                   "JARVIS_BUDGET_WARN_PERCENT", env_path, float)),
+        prices_file=_resolve_dir(values.get("JARVIS_PRICES_FILE", "config/prices.json"), project_root),
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
         search_api_key=search_api_key,
     )

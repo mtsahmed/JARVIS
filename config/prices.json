@@ -1,0 +1,15 @@
+{
+  "source": "https://developers.openai.com/api/docs/pricing (standard tier), checked 2026-09-28",
+  "note": "Used only to ESTIMATE spend for budget alerts. The real cap is the spending limit in the OpenAI dashboard. Update when prices or models change.",
+  "currency": "USD",
+  "llm_per_million_tokens": {
+    "gpt-5-mini": {"input": 0.25, "cached_input": 0.025, "output": 2.00},
+    "gpt-5-nano": {"input": 0.05, "output": 0.40}
+  },
+  "transcription_per_minute": {
+    "gpt-4o-mini-transcribe": 0.003
+  },
+  "embedding_per_million_tokens": {
+    "text-embedding-3-small": 0.02
+  }
+}

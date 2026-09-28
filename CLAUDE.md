@@ -2,7 +2,7 @@
 
 ## Project
 Jarvis is a voice-first personal assistant (Python, Windows laptop). Full requirements and roadmap: `docs/requirements.md`.
-**Current phase: 7 — Deployment & monitoring** (Phase 5's one-week daily-briefing check runs in parallel). Do not build features from later phases.
+**Current phase: Phases 1–7 complete** (Phase 5's one-week daily-briefing check still running). Phase 8 (Expansion) starts only when the owner says so, after 1–7 are stable. Do not build Phase 8 features before then.
 
 ## Providers (all behind adapters)
 - LLM: OpenAI API → `src/jarvis/llm/`
