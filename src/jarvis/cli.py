@@ -407,7 +407,8 @@ def run_jarvis(config: Config, voice: bool) -> int:
     def check_health() -> None:  # started once Jarvis is ready, so voice mode can speak a problem
         start_background_check(health_checks(config, llm, services.search, gmail, microphone=voice), alerts.problems)
 
-    bus = EventBus()  # what Jarvis is doing, for displays (the HUD subscribes in UI-2B)
+    bus = EventBus()  # what Jarvis is doing, for displays such as the HUD
+    hud = start_hud(config, bus)
     try:
         if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus)):
             scheduler.start()
@@ -419,8 +420,27 @@ def run_jarvis(config: Config, voice: bool) -> int:
         scheduler.stop()
         services.close()  # release the database files (Windows keeps open files locked)
         meter.close()
+        if hud is not None:
+            hud.stop()
     logger.info("Jarvis stopped")
     return 0
+
+
+def start_hud(config: Config, bus: EventBus) -> Any:
+    """Start the local HUD page if JARVIS_UI_ENABLED. A HUD that can't start never stops Jarvis."""
+    if not config.ui_enabled:
+        return None
+    from jarvis.ui.server import HudServer, UIError  # only loads websockets when the HUD is on
+
+    hud = HudServer(bus, config.ui_port)
+    try:
+        hud.start()
+    except UIError as e:
+        print(f"HUD unavailable: {e}. Jarvis runs without it.")
+        logger.warning("HUD unavailable: %s", e)
+        return None
+    print(f"HUD: {hud.url}")
+    return hud
 
 
 def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
