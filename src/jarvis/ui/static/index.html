@@ -2,10 +2,103 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="jarvis-session-token" content="{{JARVIS_SESSION_TOKEN}}">
 <title>Jarvis HUD</title>
+<link rel="stylesheet" href="hud.css">
+<script src="hud.js" defer></script>
 </head>
-<body>
-<p>Jarvis HUD server is running. The display arrives in step UI-2C.</p>
+<body data-mode="offline">
+<div class="hud">
+
+  <header class="top">
+    <div class="brand">
+      <div class="wordmark">J.A.R.V.I.S</div>
+      <div class="tagline">PERSONAL ASSISTANT · <span id="version">v1</span></div>
+    </div>
+    <div class="pill" role="status" aria-live="polite">
+      <span class="pill-dot" aria-hidden="true"></span>
+      <span id="pill-text">OFFLINE</span>
+    </div>
+    <div class="top-right">
+      <ul class="chips" aria-label="Services (status arrives in a later update)">
+        <li class="chip"><span class="chip-dot" aria-hidden="true"></span>LLM</li>
+        <li class="chip"><span class="chip-dot" aria-hidden="true"></span>STT</li>
+        <li class="chip"><span class="chip-dot" aria-hidden="true"></span>TTS</li>
+        <li class="chip"><span class="chip-dot" aria-hidden="true"></span>SEARCH</li>
+      </ul>
+      <div class="clock">
+        <div id="time" class="time">--:--:--</div>
+        <div id="date" class="date">&nbsp;</div>
+      </div>
+    </div>
+  </header>
+
+  <aside class="col left">
+    <section class="panel" aria-labelledby="h-reminders">
+      <h2 id="h-reminders">TODAY · REMINDERS</h2>
+      <p class="later">Available in a later update.</p>
+    </section>
+    <section class="panel" aria-labelledby="h-usage">
+      <h2 id="h-usage">USAGE · THIS MONTH</h2>
+      <p class="later">Available in a later update. For now: <code>jarvis --usage</code></p>
+    </section>
+  </aside>
+
+  <main class="center">
+    <div class="orb" aria-hidden="true">
+      <svg class="rings" viewBox="0 0 420 420">
+        <g class="ring ring1"><circle cx="210" cy="210" r="204" stroke-width="1.5" stroke-dasharray="2 9" opacity="0.5"/></g>
+        <g class="ring ring2"><circle cx="210" cy="210" r="172" stroke-width="2" stroke-dasharray="140 36 18 36" opacity="0.75"/></g>
+        <g class="ring ring3"><circle cx="210" cy="210" r="136" stroke-width="1" stroke-dasharray="4 6" opacity="0.55"/></g>
+        <g class="ring ring4"><circle cx="210" cy="210" r="104" stroke-width="7" stroke-dasharray="70 93" stroke-linecap="round" opacity="0.9"/></g>
+      </svg>
+      <div class="core"><span>JV</span></div>
+    </div>
+
+    <div class="state">
+      <h1 id="state-title" class="state-title">CONNECTING</h1>
+      <p id="state-hint" class="state-hint" aria-live="polite">Waiting for Jarvis.</p>
+    </div>
+
+    <div id="wave" class="wave" aria-hidden="true"></div>
+
+    <section class="exchange" aria-label="Last exchange">
+      <div class="line"><span class="who you">YOU</span><span id="last-user" class="said"></span></div>
+      <div class="line"><span class="who jarvis">JARVIS</span>
+        <div class="said-block">
+          <span id="last-reply" class="said"></span>
+          <ul id="last-sources" class="sources" aria-label="Sources"></ul>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside class="col right">
+    <section class="panel log-panel" aria-labelledby="h-log">
+      <h2 id="h-log">CONVERSATION</h2>
+      <ol id="log" class="log" tabindex="0" aria-label="Conversation log, newest last"></ol>
+    </section>
+    <section class="panel" aria-labelledby="h-system">
+      <h2 id="h-system">SYSTEM</h2>
+      <dl class="system">
+        <div><dt>Connection</dt><dd id="conn">Offline</dd></div>
+        <div><dt>CPU · Memory · Mic</dt><dd>Later update</dd></div>
+      </dl>
+    </section>
+  </aside>
+
+  <footer class="bottom">
+    <button type="button" class="mic" aria-label="Talk (arrives in a later update; hold the talk key for now)" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+    </button>
+    <label class="input-wrap">
+      <span class="sr-only">Type a command</span>
+      <input type="text" class="input" placeholder="Typing arrives in a later update. Hold the talk key to speak." disabled>
+    </label>
+    <button type="button" class="send" disabled>SEND</button>
+  </footer>
+
+</div>
 </body>
 </html>

@@ -79,9 +79,32 @@ def test_page_has_this_runs_token_and_strict_headers(hud: HudServer) -> None:
     assert response.status == 200 and hud.token in body and "{{JARVIS_SESSION_TOKEN}}" not in body
     csp = response.getheader("Content-Security-Policy")
     assert "default-src 'none'" in csp and "script-src 'self'" in csp and "frame-ancestors 'none'" in csp
-    assert f"connect-src ws://127.0.0.1:{hud.port}" in csp
+    assert f"connect-src 'self' ws://127.0.0.1:{hud.port};" in csp
     assert response.getheader("X-Content-Type-Options") == "nosniff"
     assert response.getheader("Cache-Control") == "no-store"
+
+
+def test_every_listed_file_is_served_with_its_type(hud: HudServer) -> None:
+    for path, (name, content_type) in server_module.FILES.items():
+        response = get(hud, path)
+        assert response.status == 200, path
+        assert response.getheader("Content-Type") == content_type
+        assert response.read() != b""
+
+
+def test_page_uses_only_listed_files_and_nothing_inline_or_remote() -> None:
+    page = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    css = (STATIC_DIR / "hud.css").read_text(encoding="utf-8")
+    script = (STATIC_DIR / "hud.js").read_text(encoding="utf-8")
+    referenced = {"/" + ref for ref in re.findall(r'(?:href|src)="([^"#]+)"', page)}
+    referenced |= {"/" + ref for ref in re.findall(r'url\("([^"]+)"\)', css)}
+    assert referenced == set(server_module.FILES) - {"/"}  # every file used, nothing unlisted
+    # The CSP (default-src 'none'; script-src/style-src 'self') would block these, so they must not exist.
+    assert not re.search(r"<script(?![^>]*\bsrc=)|<style|\sstyle=|\son\w+=", page)
+    assert "{{JARVIS_SESSION_TOKEN}}" in page
+    for text in (page, css, script):
+        assert not re.search(r"https?://(?!127\.0\.0\.1)", text.replace("http://www.w3.org/2000/svg", ""))
+    assert "setAttribute(\"style\"" not in script and "eval(" not in script and "new Function" not in script
 
 
 def test_each_run_has_a_new_token() -> None:

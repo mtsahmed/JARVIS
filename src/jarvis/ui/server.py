@@ -187,7 +187,9 @@ class HudServer:
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; "
-                f"connect-src ws://{HOST}:{self._port}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+                # 'self': the page re-reads its token from / after Jarvis restarts (a new token each run).
+                f"connect-src 'self' ws://{HOST}:{self._port}; base-uri 'none'; form-action 'none'; "
+                "frame-ancestors 'none'"
             ),
         })
         return Response(200, "OK", headers, body)
