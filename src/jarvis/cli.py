@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 import queue
@@ -14,7 +15,9 @@ from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.instance import InstanceLock
-from jarvis.core.logging_setup import setup_logging
+from jarvis.core import health
+from jarvis.core.health import FailureWatcher, start_background_check
+from jarvis.core.logging_setup import add_usage_observer, setup_logging
 from jarvis.core.scheduler import ReminderScheduler
 from jarvis.integrations.credentials import default_store
 from jarvis.llm.base import LLMAdapter, LLMError
@@ -146,6 +149,18 @@ class ReminderAlerts:
         else:
             print(f"\n[reminder] {for_terminal(message)}\nyou> ", end="", flush=True)
 
+    def problem(self, message: str) -> None:
+        """Something needs the user's attention (failed health check, repeated failures)."""
+        self._notifier.notify("Jarvis needs attention", message)
+        if self.voice_queue is not None:
+            self.voice_queue.put(f"Heads up: {message}")
+        else:
+            print(f"\n[attention] {for_terminal(message)}\nyou> ", end="", flush=True)
+
+    def problems(self, checks: list[Any]) -> None:
+        for check in checks[:2]:  # at most two, so startup is not flooded
+            self.problem(f"{check.name}: {check.detail}")
+
     def briefing(self, briefing: Briefing) -> None:
         self._notifier.notify("Jarvis briefing", "Your morning briefing is ready.")
         if self.voice_queue is not None:
@@ -164,6 +179,7 @@ def main() -> int:
                         help="manage secrets in Windows Credential Manager and exit")
     parser.add_argument("--autostart", choices=("on", "off", "status"),
                         help="start Jarvis (voice, minimized) when you sign in to Windows, and exit")
+    parser.add_argument("--health", action="store_true", help="check every part of Jarvis (free) and exit")
     args = parser.parse_args()
 
     try:
@@ -182,6 +198,8 @@ def main() -> int:
         return gmail_login(config)
     if args.autostart:
         return autostart_command(args.autostart, config)
+    if args.health:
+        return health_command(config)
 
     # One Jarvis at a time: a second copy would also answer the talk key and repeat alerts.
     lock = InstanceLock(config.data_dir / "jarvis.lock")
@@ -212,6 +230,51 @@ def autostart_command(action: str, config: Config) -> int:
     return 0
 
 
+def health_checks(config: Config, llm: Any, search: Any, gmail: Any, microphone: bool) -> list[tuple[str, Any]]:
+    """Every check is free (no chat tokens, search credits or voice characters)."""
+    from jarvis.integrations import autostart
+
+    def elevenlabs() -> Any:
+        from jarvis.core.config import load_voice_config
+
+        voice = load_voice_config()
+        if not voice.elevenlabs_use_for:
+            return health.check_elevenlabs(None)
+        from jarvis.voice.tts.elevenlabs_adapter import ElevenLabsAdapter
+
+        adapter = ElevenLabsAdapter(voice.elevenlabs_api_key or "", voice.elevenlabs_voice_id or "", voice.elevenlabs_model or "")
+        return health.check_elevenlabs(adapter.characters_left)
+
+    def briefing() -> Any:
+        last = JobState(config.data_dir / "jarvis.db").last_run("morning_briefing")
+        expected = config.briefing_time is not None and gmail is not None
+        return health.check_daily_job("morning_briefing", "Morning briefing", last, expected, local_now().date())
+
+    checks = [
+        ("OpenAI", lambda: health.check_openai(llm)),
+        ("Web search", lambda: health.check_search(search)),
+        ("Premium voice", elevenlabs),
+        ("Gmail", lambda: health.check_gmail(gmail)),
+        ("Disk space", lambda: health.check_disk(config.project_root)),
+        ("Morning briefing", briefing),
+        ("Auto-start", lambda: health.check_autostart(autostart.status(config.project_root))),
+    ]
+    if microphone:
+        checks.insert(4, ("Microphone", health.check_microphone))
+    return checks
+
+
+def health_command(config: Config) -> int:
+    try:
+        llm = create_llm(config)
+    except LLMError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    results = health.run_checks(health_checks(config, llm, start_search(config), gmail_client(config), microphone=True))
+    print(health.report(results))
+    return 1 if any(c.status == "fail" for c in results) else 0
+
+
 def run_jarvis(config: Config, voice: bool) -> int:
     try:
         llm = create_llm(config)
@@ -225,15 +288,21 @@ def run_jarvis(config: Config, voice: bool) -> int:
                         MemoryStore(config.data_dir / "memory.db", create_embedder(config)),
                         Briefer(gmail, store, llm))
     alerts = ReminderAlerts()
+    add_usage_observer(FailureWatcher(alerts.problem).observe)  # 3 failures in a row of one service -> alert
     jobs = []
     # Scheduled only once Gmail is set up (otherwise it would just say so every morning); on demand always works.
     if config.briefing_time is not None and gmail is not None:
         jobs.append(DailyJob("morning_briefing", config.briefing_time,
                              lambda: alerts.briefing(services.briefer.compose()), JobState(config.data_dir / "jarvis.db")))
     scheduler = ReminderScheduler(services.store, alerts, daily_jobs=jobs)
+
+    def check_health() -> None:  # started once Jarvis is ready, so voice mode can speak a problem
+        start_background_check(health_checks(config, llm, services.search, gmail, microphone=voice), alerts.problems)
+
     try:
-        if not (voice and run_voice(config, llm, services, alerts, scheduler)):
+        if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health)):
             scheduler.start()
+            check_health()
             session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
                                   memory=services.memory)
             run_text(config, session, services.sources)
@@ -245,7 +314,7 @@ def run_jarvis(config: Config, voice: bool) -> int:
 
 
 def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
-              scheduler: ReminderScheduler) -> bool:
+              scheduler: ReminderScheduler, on_started: Callable[[], None] = lambda: None) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -282,6 +351,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
                      sources=services.sources, briefing_speaker=briefing_speaker)
     hotkey.start()
     scheduler.start()
+    on_started()
     print(f"Jarvis voice mode ({config.llm_model}, {voice.stt_model}). "
           f"Hold {voice.ptt_key.upper()} and speak; release to send. Ctrl+C quits.")
     try:

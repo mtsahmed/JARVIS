@@ -185,3 +185,10 @@ Local errors were on non-reminder commands ("Open" → "On", "car insurance" →
 - **6E Offline voice:** after cloud speech recognition fails, the local model is used directly for 3 minutes (then the cloud is tried again); cloud timeout lowered from 15 s to 8 s (slowest benchmark clip: 2.8 s). Measured with a failing cloud: first turn 3.4 s (incl. loading the local model), next turns ~1.0 s with no cloud attempt.
 - **Phase 6 done-when met:** all tests pass (276) and the prompt-injection tests are blocked (`tests/test_injection.py`, `test_memory.py`, `test_wiring.py`).
 
+## 14. Phase 7 deployment & monitoring (2026-09-28)
+
+**Owner decisions:** minimized window with self-restart; backups on this laptop (14 days); $5/month total with warnings at 80% and 100%.
+
+- **7A Auto-start:** `jarvis --autostart on|off|status` manages `Jarvis.cmd` in the user's Startup folder (never touches a file it did not create). At sign-in `scripts/run_jarvis.cmd` runs voice mode minimized and restarts it after a crash (10 s apart, at most 4 restarts); Ctrl+C or /exit stops it. Only one Jarvis runs at a time (lock on `data/jarvis.lock`; a second copy says "already running"). Enabled 2026-09-28.
+- **7B Health:** `jarvis --health` checks OpenAI (model info), web search credits, ElevenLabs characters, Gmail sign-in, microphone, disk space, last briefing, auto-start: all free. The same checks run in the background at every start; failures (not warnings) give a desktop notification and a spoken "Heads up" (at most two). During use, 3 failures in a row of the language service, web search or premium voice give an alert (at most hourly). First run: all 8 checks OK; the morning briefing ran on 28 Sep.
+

@@ -119,6 +119,19 @@ class OpenAIAdapter:
         )
 
 
+    def ping(self) -> None:
+        """Health check at no cost: is OpenAI reachable, the key accepted, and the model available?"""
+        try:
+            self._client.models.retrieve(self._model)
+        except openai.AuthenticationError:
+            raise LLMError("OpenAI rejected the API key (401).") from None
+        except openai.NotFoundError:
+            raise LLMError(f"OpenAI does not offer the model {self._model!r} to this key.") from None
+        except openai.APIConnectionError:
+            raise LLMError("Could not reach OpenAI.") from None
+        except openai.OpenAIError as e:
+            raise LLMError(f"OpenAI check failed ({type(e).__name__}).") from None
+
     def _stream(self, request: dict[str, Any], on_text: Callable[[str], None]) -> Response:
         """Stream the reply, passing text deltas to on_text; return the final Response."""
         with self._client.responses.create(**request, stream=True) as stream:

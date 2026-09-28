@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -71,9 +71,23 @@ def setup_logging(logs_dir: Path, secrets: Iterable[str] = (), level: int = logg
         jsonl.addHandler(_file_handler(logs_dir / filename, "%(message)s", secrets))
 
 
+_usage_observers: list[Callable[[dict[str, Any]], None]] = []
+
+
+def add_usage_observer(observer: Callable[[dict[str, Any]], None]) -> None:
+    """Also send every usage record to `observer` (e.g. the repeated-failure watcher). Never raises."""
+    _usage_observers.append(observer)
+
+
 def _log_jsonl(logger_name: str, record: dict[str, Any]) -> None:
     entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), **record}
     logging.getLogger(logger_name).info(json.dumps(entry, ensure_ascii=False))
+    if logger_name == USAGE_LOGGER_NAME:
+        for observer in list(_usage_observers):
+            try:
+                observer(entry)
+            except Exception:
+                logging.getLogger(__name__).exception("Usage observer failed")
 
 
 def log_usage(record: dict[str, Any]) -> None:

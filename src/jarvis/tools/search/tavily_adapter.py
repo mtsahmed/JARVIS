@@ -19,6 +19,7 @@ from jarvis.tools.search.base import SearchError, SearchResponse, SearchResult, 
 logger = logging.getLogger(__name__)
 
 API_URL = "https://api.tavily.com/search"
+USAGE_URL = "https://api.tavily.com/usage"
 MAX_SNIPPET_CHARS = 400
 
 _STATUS_MESSAGES = {
@@ -72,3 +73,17 @@ class TavilyAdapter:
         )
         credits = (data.get("usage") or {}).get("credits")
         return SearchResponse(results, int(credits) if isinstance(credits, (int, float)) else None)
+
+    def usage(self) -> tuple[int, int | None]:
+        """(credits used this billing period, plan limit or None). Free call: GET /usage (docs.tavily.com)."""
+        request = urllib.request.Request(USAGE_URL, headers={"Authorization": f"Bearer {self._api_key}"})
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                account = json.loads(response.read()).get("account") or {}
+        except urllib.error.HTTPError as e:
+            e.close()
+            raise SearchError(_STATUS_MESSAGES.get(e.code, f"Tavily usage check failed (HTTP {e.code}).")) from None
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            raise SearchError("Could not reach the web search service.") from None
+        used, limit = account.get("plan_usage"), account.get("plan_limit")
+        return int(used or 0), (int(limit) if isinstance(limit, (int, float)) else None)
