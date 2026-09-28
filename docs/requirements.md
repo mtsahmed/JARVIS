@@ -83,7 +83,6 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
 - Gmail tokens expire every 7 days while the Google project is in Testing mode (personal Gmail): re-run `jarvis --gmail-login` weekly
-- Phase 6 threat review: AUTO tools can be triggered by injected text if the model is ever hijacked (create_reminder: nuisance; web_search: could send private text to Tavily in the query). Not observed in testing; option: require approval for web searches in a turn after a file was read
 - Web questions take 5-10 s in voice mode (search round trips plus answer); Jarvis says "Let me check." at once to cover the wait
 - Optional: if a hanging network makes offline voice turns slow (cloud STT timeout 15 s), skip the cloud for a few minutes after a failure
 
@@ -177,4 +176,9 @@ Local errors were on non-reminder commands ("Open" → "On", "car insurance" →
 - **On demand:** `morning_briefing` tool (AUTO, read-only, audited without email text); voice says "Let me check your inbox." and speaks the answer in one piece with the premium voice.
 - **Sign-in:** `jarvis --gmail-login` (browser, read-only consent); expired or missing sign-in is reported plainly ("Run: jarvis --gmail-login").
 - Tests: 16 (Gmail parsing and query with faked HTTP, 401/expiry, briefing composition, LLM failure fallback, audit privacy, once-a-day job incl. restart and failure, premium voice delivery).
+
+## 13. Phase 6 hardening (2026-09-28)
+
+- **6A Secrets:** Windows Credential Manager (per user, this computer only, verified on write); config order environment variable > Credential Manager > .env; `jarvis --secrets status|import|set`. Owner kept the plain-text `.env` keys and Google files as an unused backup for now.
+- **6B Injection guard (closes the Phase 3 residual risk):** `read_file`, `web_search` and `morning_briefing` bring outside text into a request. After that, in the same request, `web_search` ("Search the web for '...'?") and `create_reminder` need the user's yes (never remembered; resets with each new request). `remember` stays guarded by the user's own words. Tests: a hijacked model trying to leak private facts in a search query or plant a reminder after a file, web result or email is asked and refused. Live check: 4 normal web questions, 1 search each, 0 extra questions.
 

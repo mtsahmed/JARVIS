@@ -33,6 +33,13 @@ class ToolRegistry:
         self._tools = {tool.name: tool for tool in tools}
         self._audit = audit_sink
         self._approved: set[tuple[str, str]] = set()  # (tool, remember_key) approved in this chat session
+        # True once outside text (file, web page, email) entered the current turn: from then on, actions
+        # that send data out or change something need the user's yes (prompt-injection guard, Phase 6B).
+        self._untrusted_in_turn = False
+
+    def begin_turn(self) -> None:
+        """A new user request starts: no outside text has been read yet."""
+        self._untrusted_in_turn = False
 
     def forget_approvals(self) -> None:
         """Start a new chat session: every CONFIRM action asks again."""
@@ -77,12 +84,22 @@ class ToolRegistry:
                     return self._finish(entry, started, decision, "denied", DECLINED)
                 if remembered is not None:
                     self._approved.add(remembered)
+        elif tool.confirm_after_untrusted is not None and self._untrusted_in_turn:
+            # Text from a file, web page or email is in play: it could be steering this action (e.g. to
+            # leak private facts in a search query), so the user decides. Never remembered.
+            entry["guard"] = "after untrusted content"
+            approved = (confirmer or DenyAll()).confirm(tool.confirm_after_untrusted(args))
+            decision = "approved" if approved else "denied"
+            if not approved:
+                return self._finish(entry, started, decision, "denied", DECLINED)
 
         if on_start is not None:
             on_start(name)  # permission granted and the tool is about to run (e.g. voice says "Let me check.")
         try:
             result = tool.handler(args)
             status = "ok"
+            if tool.untrusted_output:
+                self._untrusted_in_turn = True
         except ToolError as e:
             result, status = f"Error: {e}", "error"
         except Exception:

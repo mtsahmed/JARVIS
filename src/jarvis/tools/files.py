@@ -280,5 +280,6 @@ def file_tools(index: FileIndex) -> list[Tool]:
             describe=lambda a: f"Read {Path(str(a['path'])).name} and send its text to OpenAI?",
             check=check_path,
             remember_key=same_file,  # asked once per file per chat session
+            untrusted_output=True,  # file text could contain planted instructions
         ),
     ]

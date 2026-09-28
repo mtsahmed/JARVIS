@@ -163,6 +163,8 @@ def reminder_tools(store: ReminderStore, clock: Clock = local_now) -> list[Tool]
             },
             Tier.AUTO,
             create,
+            # After outside text (file, web page, email) in the same request, planted text could be asking.
+            confirm_after_untrusted=lambda a: f"Create a reminder '{str(a['text']).strip()}' for {str(a['due']).strip()}?",
         ),
         Tool(
             "list_reminders",

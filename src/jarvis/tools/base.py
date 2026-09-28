@@ -39,6 +39,11 @@ class Tool:
     # the same key (e.g. the same file), so the user is asked once per file instead of every time.
     # Leave unset for actions that must be confirmed every time (e.g. cancelling a reminder).
     remember_key: Callable[[dict[str, Any]], str] | None = None
+    # Prompt-injection guard (Phase 6B). True for tools whose output is outside text (file, web page, email).
+    untrusted_output: bool = False
+    # For AUTO tools that send data out or change something: once untrusted text has entered the current
+    # turn, the call needs the user's yes, asked with this question (e.g. "Search the web for 'X'?").
+    confirm_after_untrusted: Callable[[dict[str, Any]], str] | None = None
 
     def __post_init__(self) -> None:
         if self.tier is Tier.CONFIRM and self.describe is None:

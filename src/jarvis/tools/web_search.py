@@ -67,7 +67,8 @@ def web_search_tool(adapter: SearchAdapter, sources: Sources,
         "web_search",
         "Search the web for current information: news, prices, market data, weather, sports, opening hours, "
         "or any fact that may have changed recently. Answer from the results in your own words; never read "
-        "URLs aloud (sources are shown on screen). Use topic 'news' for recent events, otherwise 'general'.",
+        "URLs aloud (sources are shown on screen). Use topic 'news' for recent events, otherwise 'general'. "
+        "Prefer one well-chosen search per question; a second search in the same request needs the user's approval.",
         {
             "type": "object",
             "properties": {
@@ -79,4 +80,7 @@ def web_search_tool(adapter: SearchAdapter, sources: Sources,
         },
         Tier.AUTO,
         search,
+        untrusted_output=True,  # web pages could contain planted instructions
+        # After outside text in the same request, a search could be steered to leak private facts in its query.
+        confirm_after_untrusted=lambda a: f"Search the web for '{str(a['query']).strip()}'?",
     )

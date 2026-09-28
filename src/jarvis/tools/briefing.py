@@ -120,6 +120,7 @@ def briefing_tool(briefer: Briefer) -> Tool:
         {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
         Tier.AUTO,  # read-only; email text goes to the LLM only to summarize it
         run,
+        untrusted_output=True,  # email text could contain planted instructions
     )
 
 
