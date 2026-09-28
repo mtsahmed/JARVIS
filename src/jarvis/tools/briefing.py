@@ -14,6 +14,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Protocol
 
+from jarvis.core.db import ClosingDB
 from jarvis.core.text import for_terminal
 from jarvis.llm.base import LLMAdapter, LLMError, Message
 from jarvis.tools.base import Tier, Tool, ToolError
@@ -128,7 +129,7 @@ def briefing_tool(briefer: Briefer) -> Tool:
 # --- once-a-day scheduling ----------------------------------------------------------------------
 
 
-class JobState:
+class JobState(ClosingDB):
     """Remembers the last day each daily job ran (in data/jarvis.db), so each runs once per day."""
 
     def __init__(self, db_path: Path) -> None:

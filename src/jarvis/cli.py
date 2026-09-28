@@ -56,6 +56,11 @@ class Services:
     memory: MemoryStore  # facts the user asked Jarvis to remember
     briefer: Briefer  # morning briefing (Gmail + today's reminders)
 
+    def close(self) -> None:
+        for store in (self.store, self.memory, self.files):
+            if store is not None:
+                store.close()
+
     def build_tools(self) -> ToolRegistry:
         """All tools Jarvis may use. Each declares its permission tier."""
         tools = [*reminder_tools(self.store), *memory_tools(self.memory), briefing_tool(self.briefer),
@@ -199,6 +204,7 @@ def main() -> int:
             run_text(config, session, services.sources)
     finally:
         scheduler.stop()
+        services.close()  # release the database files (Windows keeps open files locked)
     logger.info("Jarvis stopped")
     return 0
 

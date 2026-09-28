@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from jarvis.core.db import ClosingDB
 from jarvis.tools.base import Tier, Tool, ToolError
 from jarvis.tools.file_text import EXTRACTOR_VERSION, READABLE_EXTENSIONS, extract_text
 
@@ -57,7 +58,7 @@ class FileHit:
     modified: datetime
 
 
-class FileIndex:
+class FileIndex(ClosingDB):
     def __init__(self, db_path: Path, roots: tuple[Path, ...], excluded: tuple[Path, ...] = ()) -> None:
         self._roots = tuple(r.resolve() for r in roots)
         self._excluded = tuple(e.resolve() for e in excluded)

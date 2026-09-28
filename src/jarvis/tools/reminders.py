@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from jarvis.core.db import ClosingDB
 from jarvis.tools.base import Tier, Tool, ToolError
 
 Clock = Callable[[], datetime]  # returns an aware local datetime
@@ -28,7 +29,7 @@ class Reminder:
     due: datetime  # aware, local time
 
 
-class ReminderStore:
+class ReminderStore(ClosingDB):
     """Reminders in SQLite. Cancelled reminders are marked, not deleted, so history stays auditable."""
 
     def __init__(self, db_path: Path) -> None:

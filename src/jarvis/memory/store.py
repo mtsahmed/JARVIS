@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
+from jarvis.core.db import ClosingDB
 from jarvis.llm.base import Embedder, LLMError
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class Memory:
     saved: datetime  # local time
 
 
-class MemoryStore:
+class MemoryStore(ClosingDB):
     def __init__(self, db_path: Path, embedder: Embedder | None = None) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._embedder = embedder
