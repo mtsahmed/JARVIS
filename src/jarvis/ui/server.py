@@ -35,6 +35,8 @@ from jarvis.ui.hub import Hub, send_to
 from jarvis.ui.protocol import MAX_MESSAGE_BYTES, ProtocolError, envelope, error_message, parse_client
 
 logger = logging.getLogger(__name__)
+# The library logs every request at INFO; only its warnings and errors belong in logs/jarvis.log.
+logging.getLogger("websockets").setLevel(logging.WARNING)
 
 HOST = "127.0.0.1"
 STATIC_DIR = Path(__file__).parent / "static"
@@ -168,6 +170,8 @@ class HudServer:
             if self._hub is not None and self._hub.client_count >= MAX_CLIENTS:
                 return connection.respond(http.HTTPStatus.SERVICE_UNAVAILABLE, "Too many HUD pages open\n")
             return None  # go on with the WebSocket handshake
+        if path == "/favicon.ico":  # browsers ask for a tab icon; there is none
+            return Response(204, "No Content", Headers({"Content-Length": "0"}))
         if path not in FILES:
             return connection.respond(http.HTTPStatus.NOT_FOUND, "Not found\n")
         return self._file_response(*FILES[path])

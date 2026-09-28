@@ -107,6 +107,13 @@ def test_page_uses_only_listed_files_and_nothing_inline_or_remote() -> None:
     assert "setAttribute(\"style\"" not in script and "eval(" not in script and "new Function" not in script
 
 
+def test_favicon_gets_no_content_and_requests_are_not_logged(hud: HudServer, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO")
+    assert get(hud, "/favicon.ico").status == 204
+    assert get(hud, "/").status == 200
+    assert "HTTP response sent" not in caplog.text  # the library's per-request lines stay out of the log
+
+
 def test_each_run_has_a_new_token() -> None:
     assert HudServer(EventBus(), 0).token != HudServer(EventBus(), 0).token
 
