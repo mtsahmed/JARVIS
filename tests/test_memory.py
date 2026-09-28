@@ -206,3 +206,12 @@ def test_injected_text_cannot_plant_a_memory(store: MemoryStore) -> None:
     ChatSession(Hijacked(), history_turns=3, usage_sink=lambda r: None, tools=registry, memory=store).ask(
         "What do my meeting notes say?")
     assert store.all() == [] and audit[0]["decision"] == "blocked"
+
+
+def test_remembered_fact_text_never_reaches_the_audit_log(store: MemoryStore) -> None:
+    registry, audit = setup_tools(store)
+    store.current_request = "Remember that my PIN hint is the dog's name"
+    fact = "The user's PIN hint is the dog's name."
+    registry.run("remember", json.dumps({"fact": fact}))
+    assert audit[0]["args"] == {"fact": f"[private, {len(fact)} characters]"}
+    assert "PIN hint" not in json.dumps(audit)

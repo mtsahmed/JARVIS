@@ -14,6 +14,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Protocol
 
+from jarvis.core.text import for_terminal
 from jarvis.llm.base import LLMAdapter, LLMError, Message
 from jarvis.tools.base import Tier, Tool, ToolError
 from jarvis.tools.reminders import Clock, ReminderStore, describe_when, local_now
@@ -75,7 +76,7 @@ class Briefer:
         if not emails and not reminders:
             spoken = "Good morning. " + (f"I couldn't check your email: {problem} " if problem else
                                          "You have no important unread emails ") + "and no reminders today."
-            return Briefing(spoken.replace("  ", " "), screen)
+            return Briefing(for_terminal(spoken.replace("  ", " ")), for_terminal(screen))
         try:
             reply = self._llm.generate([Message("user", _data_block(emails, reminders, problem))], BRIEFING_INSTRUCTIONS)
             spoken = reply.text.strip()
@@ -85,7 +86,7 @@ class Briefer:
         if not spoken:  # still useful without the LLM
             spoken = (f"Good morning. You have {len(emails)} important unread emails"
                       f"{' and ' + str(len(reminders)) + ' reminders today' if reminders else ''}. Details are on screen.")
-        return Briefing(spoken, screen)
+        return Briefing(for_terminal(spoken), for_terminal(screen))
 
 
 def _data_block(emails: list[Any], reminders: list[str], problem: str | None) -> str:

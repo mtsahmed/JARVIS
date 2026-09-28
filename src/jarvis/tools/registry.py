@@ -63,6 +63,9 @@ class ToolRegistry:
         except ValueError:
             return self._finish(entry, started, "rejected", "error", "Error: the tool arguments were not valid JSON.")
         entry["args"] = _redact(args)
+        for key in (tool.private_args if tool else ()):
+            if key in entry["args"]:  # e.g. a remembered fact: only its length is audited
+                entry["args"][key] = f"[private, {len(str(args[key]))} characters]"
 
         if tool is None:
             return self._finish(entry, started, "rejected", "error", f"Error: there is no tool named {name!r}.")

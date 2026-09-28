@@ -44,6 +44,9 @@ class Tool:
     # For AUTO tools that send data out or change something: once untrusted text has entered the current
     # turn, the call needs the user's yes, asked with this question (e.g. "Search the web for 'X'?").
     confirm_after_untrusted: Callable[[dict[str, Any]], str] | None = None
+    # Argument names whose values must not be written to the audit log (only their length is), e.g. a
+    # remembered fact: "forget" must really forget, so no copy may stay behind in the logs.
+    private_args: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if self.tier is Tier.CONFIRM and self.describe is None:

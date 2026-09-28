@@ -14,6 +14,7 @@ from typing import Any, Protocol
 import numpy as np
 import psutil
 
+from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
@@ -173,7 +174,7 @@ class VoiceLoop:
                 print(f"\n[briefing]\n{alert.screen}\njarvis> {alert.spoken}")
                 self._say(alert.spoken, self._briefing_speaker)
                 continue
-            print(f"\n[reminder] {alert}")
+            print(f"\n[reminder] {for_terminal(alert)}")
             self._say(alert)
 
     def _next_event(self, timeout: float | None = None) -> str | None:
@@ -215,10 +216,10 @@ class VoiceLoop:
                           "latency_ms": stt_ms})
 
         if not transcript.text or is_filler_only(transcript.text):
-            print(f"(didn't catch that{': ' + transcript.text if transcript.text else ''})")
+            print(f"(didn't catch that{': ' + for_terminal(transcript.text) if transcript.text else ''})")
             self._say("Sorry, I didn't catch that.")
             return
-        print(f"you said> {transcript.text}")
+        print(f"you said> {for_terminal(transcript.text)}")
         if is_reset_request(transcript.text):
             self._session.reset()
             print("(history cleared)")
@@ -297,7 +298,7 @@ class VoiceLoop:
 
     def _confirm_by_voice(self, question: str) -> bool:
         """Main thread: read the action back, then listen for an explicit spoken yes."""
-        print(f"jarvis> {question} (hold the key and say yes to confirm)")
+        print(f"jarvis> {for_terminal(question)} (hold the key and say yes to confirm)")
         self._say(f"{question} Say yes to confirm.")
         self._drain()  # ignore key presses made while the question was being read out
         approved = False
@@ -307,7 +308,7 @@ class VoiceLoop:
             except STTError as e:
                 print(f"[error] {e}")
                 answer = ""
-            print(f"you said> {answer or '(nothing)'}")
+            print(f"you said> {for_terminal(answer) or '(nothing)'}")
             approved = is_yes(answer)
         else:
             print("(no answer)")

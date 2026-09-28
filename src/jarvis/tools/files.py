@@ -33,6 +33,14 @@ BLOCKED_EXTENSIONS = frozenset({
     ".msi", ".msp", ".scr", ".pif", ".cpl", ".hta", ".jar", ".py", ".pyw", ".dll", ".sys", ".lnk", ".url",
     ".reg", ".inf", ".scf", ".application", ".appref-ms", ".gadget", ".settingcontent-ms",
     ".docm", ".xlsm", ".pptm", ".dotm", ".xltm",
+    # Added in the Phase 6C threat review: installers and packages, disk images (mounting exposes
+    # runnable content), compiled help and management consoles (can run scripts), Office add-ins and
+    # Access databases (macros), remote-desktop and search/library files (used in phishing attacks).
+    ".msix", ".msixbundle", ".appx", ".appxbundle", ".appinstaller",
+    ".iso", ".img", ".vhd", ".vhdx",
+    ".chm", ".msc", ".ws", ".wsc", ".sct", ".ps1xml", ".psc1",
+    ".xll", ".xlam", ".ppam", ".mdb", ".accdb", ".accde", ".mde",
+    ".rdp", ".search-ms", ".library-ms", ".jnlp",
 })
 MAX_RESULTS = 5
 READ_CHARS = 3500  # text sent to the model per read (keeps tokens and exposure small)

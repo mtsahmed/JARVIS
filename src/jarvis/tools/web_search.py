@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from jarvis.core.logging_setup import log_usage
+from jarvis.core.text import for_terminal
 from jarvis.tools.base import Tier, Tool, ToolError
 from jarvis.tools.search.base import SearchAdapter, SearchError, SearchResult
 
@@ -34,7 +35,8 @@ class Sources:
 
 
 def format_sources(items: list[SearchResult]) -> str:
-    return "Sources:\n" + "\n".join(f"  {i}. {r.title or r.url} - {r.url}" for i, r in enumerate(items, 1))
+    lines = (f"  {i}. {r.title or r.url} - {r.url}" for i, r in enumerate(items, 1))
+    return for_terminal("Sources:\n" + "\n".join(lines))  # titles come from web pages: no control characters
 
 
 def web_search_tool(adapter: SearchAdapter, sources: Sources,

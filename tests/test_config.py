@@ -92,3 +92,13 @@ def test_secrets_not_copied_into_os_environ(tmp_path: Path) -> None:
 
     load_config(project_root=write_env(tmp_path, VALID_ENV))
     assert "OPENAI_API_KEY" not in os.environ
+
+
+def test_log_filter_redacts_secret_values(tmp_path: Path) -> None:
+    import logging
+
+    from jarvis.core.logging_setup import SecretRedactingFilter
+
+    record = logging.LogRecord("t", logging.INFO, __file__, 1, "key=%s and again %s", ("sk-test-secret", "sk-test-secret"), None)
+    assert SecretRedactingFilter(["sk-test-secret"]).filter(record)
+    assert record.getMessage() == "key=[REDACTED] and again [REDACTED]"

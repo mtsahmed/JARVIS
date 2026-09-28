@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from jarvis.core.text import for_terminal
+
 # End of sentence: . ! ? (optionally followed by closing quotes/brackets) and then whitespace; or a line break.
 # Requiring whitespace after the punctuation means "3.5" or "example.com" never split, and a
 # sentence is only released once the next piece of text shows it really ended.
@@ -50,7 +52,7 @@ _NUMBER_RANGE = re.compile(r"(\d)\s*[—–]\s*(\$?\d)")
 def speakable(sentence: str) -> str:
     """Strip markdown and symbols a voice would read out literally (bullets, **bold**, headings, dashes)."""
     # Per line: a short fragment can be joined with the next line, which may start with its own bullet.
-    text = "\n".join(_LIST_MARKER.sub("", line) for line in sentence.splitlines())
+    text = "\n".join(_LIST_MARKER.sub("", line) for line in for_terminal(sentence).splitlines())
     text = _MARKUP.sub("", text)
     text = _NUMBER_RANGE.sub(r"\1 to \2", text)  # "$4.9–5.0T" is said as "4.9 to 5.0", not "4.9, 5.0"
     text = _DASHES.sub(", ", text)

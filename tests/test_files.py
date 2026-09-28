@@ -211,3 +211,20 @@ def test_file_permissions_asked_once_per_file_and_action(docs: dict[str, Path], 
     assert answer.asked == ["Read car-insurance_2025.pdf and send its text to OpenAI?", "Open car-insurance_2025.pdf?",
                             "Read budget.csv and send its text to OpenAI?"]
     assert [a["decision"] for a in audit].count("remembered") == 3
+
+
+@pytest.mark.parametrize("name", ["setup.EXE", "invoice.pdf.exe", "app.msix", "disk.iso", "help.chm", "console.msc",
+                                  "addin.xll", "db.accde", "connect.rdp", "query.search-ms", "run.ps1", "link.lnk"])
+def test_code_running_types_blocked_before_asking(docs: dict[str, Path], monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    registry, opened, _ = setup_tools(docs, monkeypatch)
+    (docs["root"] / name).write_bytes(b"x")
+    answer = Answer(True)
+    assert registry.run("open_file", arg(docs["root"] / name), answer).startswith("Blocked: programs")
+    assert answer.asked == [] and opened == []
+
+
+@pytest.mark.parametrize("name", ["report.pdf", "book.epub", "notes.txt", "budget.xlsx", "photo.jpg"])
+def test_ordinary_documents_can_be_opened(docs: dict[str, Path], monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    registry, opened, _ = setup_tools(docs, monkeypatch)
+    (docs["root"] / name).write_bytes(b"x")
+    assert registry.run("open_file", arg(docs["root"] / name), Answer(True)) == f"Opened {name}."

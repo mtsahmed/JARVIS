@@ -10,6 +10,7 @@ import queue
 import sys
 import threading
 
+from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
@@ -37,7 +38,7 @@ class TextConfirmer:
 
     def confirm(self, question: str) -> bool:
         try:
-            answer = input(f"jarvis> {question} [y/N] ").strip().lower()
+            answer = input(f"jarvis> {for_terminal(question)} [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return False
@@ -137,7 +138,7 @@ class ReminderAlerts:
         if self.voice_queue is not None:
             self.voice_queue.put(f"Reminder: {message}" if not missed else message)
         else:
-            print(f"\n[reminder] {message}\nyou> ", end="", flush=True)
+            print(f"\n[reminder] {for_terminal(message)}\nyou> ", end="", flush=True)
 
     def briefing(self, briefing: Briefing) -> None:
         self._notifier.notify("Jarvis briefing", "Your morning briefing is ready.")
@@ -281,7 +282,7 @@ def run_text(config: Config, session: ChatSession, sources: Sources) -> None:
             print("[error] Something went wrong. Details are in logs/jarvis.log.")
             continue
 
-        print(f"jarvis> {reply.text or '(no reply text)'}")
+        print(f"jarvis> {for_terminal(reply.text) or '(no reply text)'}")
         if found := sources.take():
             print(format_sources(found))
         if reply.incomplete_reason:

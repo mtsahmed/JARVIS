@@ -69,6 +69,7 @@ def memory_tools(store: MemoryStore) -> list[Tool]:
             Tier.AUTO,
             remember,
             check=check_remember,
+            private_args=frozenset({"fact"}),  # "forget" must really forget: no copy in the audit log
         ),
         Tool(
             "list_memories",
