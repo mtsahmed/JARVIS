@@ -19,3 +19,7 @@ dist/
 .vscode/
 .idea/
 Thumbs.db
+
+# Test coverage output
+.coverage
+htmlcov/
