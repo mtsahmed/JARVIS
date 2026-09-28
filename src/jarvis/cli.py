@@ -6,6 +6,7 @@ import argparse
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import date, time
 from typing import Any
 import queue
 import sys
@@ -15,7 +16,7 @@ from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.instance import InstanceLock
-from jarvis.core import health
+from jarvis.core import backup, health
 from jarvis.core.health import FailureWatcher, start_background_check
 from jarvis.core.logging_setup import add_usage_observer, setup_logging
 from jarvis.core.scheduler import ReminderScheduler
@@ -180,6 +181,9 @@ def main() -> int:
     parser.add_argument("--autostart", choices=("on", "off", "status"),
                         help="start Jarvis (voice, minimized) when you sign in to Windows, and exit")
     parser.add_argument("--health", action="store_true", help="check every part of Jarvis (free) and exit")
+    parser.add_argument("--backup", action="store_true", help="back up memories and reminders now, and exit")
+    parser.add_argument("--restore", nargs="?", const="list", metavar="YYYY-MM-DD",
+                        help="list backups, or restore the one from that date (Jarvis must be stopped), and exit")
     args = parser.parse_args()
 
     try:
@@ -200,6 +204,10 @@ def main() -> int:
         return autostart_command(args.autostart, config)
     if args.health:
         return health_command(config)
+    if args.backup:
+        return backup_command(config)
+    if args.restore:
+        return restore_command(config, args.restore)
 
     # One Jarvis at a time: a second copy would also answer the talk key and repeat alerts.
     lock = InstanceLock(config.data_dir / "jarvis.lock")
@@ -230,6 +238,49 @@ def autostart_command(action: str, config: Config) -> int:
     return 0
 
 
+def backup_command(config: Config) -> int:
+    """Safe while Jarvis is running (SQLite online backup)."""
+    try:
+        folder = backup.backup_now(config.data_dir, local_now().date())
+    except backup.BackupError as e:
+        print(f"Backup failed: {e}", file=sys.stderr)
+        return 1
+    JobState(config.data_dir / "jarvis.db").mark("backup", local_now().date())
+    print(f"Backup saved: {folder}")
+    return 0
+
+
+def restore_command(config: Config, when: str, ask: Callable[[str], str] = input) -> int:
+    days = backup.list_backups(config.data_dir)
+    if when == "list":
+        print("Backups: " + (", ".join(d.isoformat() for d in days) if days else "none yet"))
+        print("Restore one with: jarvis --restore YYYY-MM-DD")
+        return 0
+    try:
+        day = date.fromisoformat(when)
+    except ValueError:
+        print(f"Use a date like {local_now():%Y-%m-%d}.", file=sys.stderr)
+        return 1
+    lock = InstanceLock(config.data_dir / "jarvis.lock")
+    if not lock.acquire():  # replacing databases under a running Jarvis would corrupt its view of them
+        print("Jarvis is running. Stop it first (Ctrl+C in its window), then restore.", file=sys.stderr)
+        return 1
+    try:
+        answer = ask(f"Replace your current memories and reminders with the backup from {day}? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("Nothing changed.")
+            return 0
+        try:
+            safety = backup.restore(config.data_dir, day)
+        except backup.BackupError as e:
+            print(f"Restore failed, nothing changed: {e}", file=sys.stderr)
+            return 1
+        print(f"Restored {day}. Your previous data was saved in {safety}.")
+        return 0
+    finally:
+        lock.release()
+
+
 def health_checks(config: Config, llm: Any, search: Any, gmail: Any, microphone: bool) -> list[tuple[str, Any]]:
     """Every check is free (no chat tokens, search credits or voice characters)."""
     from jarvis.integrations import autostart
@@ -257,6 +308,8 @@ def health_checks(config: Config, llm: Any, search: Any, gmail: Any, microphone:
         ("Gmail", lambda: health.check_gmail(gmail)),
         ("Disk space", lambda: health.check_disk(config.project_root)),
         ("Morning briefing", briefing),
+        ("Backups", lambda: health.check_daily_job(
+            "backup", "Backups", JobState(config.data_dir / "jarvis.db").last_run("backup"), True, local_now().date())),
         ("Auto-start", lambda: health.check_autostart(autostart.status(config.project_root))),
     ]
     if microphone:
@@ -289,7 +342,9 @@ def run_jarvis(config: Config, voice: bool) -> int:
                         Briefer(gmail, store, llm))
     alerts = ReminderAlerts()
     add_usage_observer(FailureWatcher(alerts.problem).observe)  # 3 failures in a row of one service -> alert
-    jobs = []
+    # Daily backup of memories and reminders: at the first check each day (time 00:00 = "as soon as possible").
+    jobs = [DailyJob("backup", time(0, 0), lambda: backup.backup_now(config.data_dir, local_now().date()),
+                     JobState(config.data_dir / "jarvis.db"))]
     # Scheduled only once Gmail is set up (otherwise it would just say so every morning); on demand always works.
     if config.briefing_time is not None and gmail is not None:
         jobs.append(DailyJob("morning_briefing", config.briefing_time,
