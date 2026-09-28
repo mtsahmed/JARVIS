@@ -1,7 +1,7 @@
 # Jarvis — Threat model (Phase 6C)
 
 Last reviewed: 2026-09-28 · Scope: Jarvis as built through Phase 6B (text + voice, reminders, file search/read,
-web search, memory, Gmail read-only briefing). Owner: single user on a personal Windows laptop.
+web search, memory, Gmail read-only briefing); T18–T20 added for the UI-2 HUD (local web page). Owner: single user on a personal Windows laptop.
 
 ## 1. What is worth protecting
 
@@ -31,6 +31,7 @@ web search, memory, Gmail read-only briefing). Owner: single user on a personal 
 | LLM output (text and tool calls) | Untrusted | May be steered by any untrusted input above |
 | Providers (OpenAI, Tavily, ElevenLabs, Google, Hugging Face) | External | Receive data; can fail |
 | Python packages and the speech model download | External | Supply chain |
+| HUD page (local browser, UI-2; off unless turned on) | Untrusted input, display only | Can only send `hello` and `ping`; it cannot run tools, change settings or read files |
 
 ## 3. Threats, protections, and evidence
 
@@ -53,6 +54,9 @@ web search, memory, Gmail read-only briefing). Owner: single user on a personal 
 | T15 | Provider outage or network loss breaks Jarvis | Every provider call has a timeout and a clear error; local speech fallback; reminders work offline; text mode always works | Adapter tests; fallback tests | After a cloud failure, one voice turn may wait up to 8 s; the next 3 minutes use local speech recognition directly (6E) |
 | T16 | Terminal escape sequences in web/email/file text printed to the console | Control characters stripped before printing (6C) | `tests/test_cli_output.py` (6C) | — |
 | T17 | Reminder or briefing text visible on the lock screen via notifications | — | — | Accepted: turn off lock-screen notifications in Windows settings if this matters |
+| T18 | A website or another program reaches the HUD server (reads the conversation, or floods it) | Off by default; 127.0.0.1 only, port held exclusively; Host must be `127.0.0.1:<port>` (DNS rebinding); WebSocket Origin must be the page; a new random token per run, first message `hello` with it within 5 s (constant-time compare); strict message checks; 64 KB limit, 3 pages, 100 messages per 10 s; fixed file list | `tests/test_ui_server.py`, `test_ui_protocol.py` | Another program running as you could read the page like a browser and get the token; it could already read your files (same trust level) |
+| T19 | Web, email or file text shown on the HUD runs as code (XSS) | All text inserted with `textContent`; only `https://` source links (`noopener noreferrer`); CSP `default-src 'none'`, scripts and styles only from the server, no inline code; texts clipped to 4,000 characters | `tests/test_ui_server.py` (no `innerHTML`, no inline code, no remote URLs; `javascript:` links dropped) | — |
+| T20 | The HUD shows what you said and Jarvis's replies on screen | Off unless turned on; the log keeps only the last 50 entries, in the page's memory only (never stored by the page) | — | Accepted: anyone who can see the screen can read it; close the tab or lock the laptop |
 
 ## 4. Owner actions (outside Jarvis's control)
 

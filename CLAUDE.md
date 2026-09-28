@@ -2,7 +2,7 @@
 
 ## Project
 Jarvis is a voice-first personal assistant (Python, Windows laptop). Full requirements and roadmap: `docs/requirements.md`.
-**Current phase: UI-2 — HUD display (one-way)**; spec in `docs/ui-protocol.md` and `docs/ui-design.md`. Phases 1–7 complete (Phase 5's one-week daily-briefing check still running). Phase 8 (Expansion) is on hold until the owner says so. Do not build features from later phases (UI-3+ or Phase 8).
+**Current phase: none active.** Phases 1–7 and UI-2 (HUD display, one-way) are complete; Phase 5's one-week daily-briefing check is still running. Next steps start only when the owner says so: UI-3 (two-way HUD; spec in `docs/ui-protocol.md` and `docs/ui-design.md`) or Phase 8 (Expansion, on hold). Do not build features from later phases before then.
 
 ## Providers (all behind adapters)
 - LLM: OpenAI API → `src/jarvis/llm/`
