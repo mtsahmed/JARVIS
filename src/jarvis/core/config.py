@@ -13,6 +13,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from jarvis.integrations.credentials import SECRET_NAMES, default_store
+
 # src/jarvis/core/config.py -> project root is three levels above this package.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -80,15 +82,32 @@ class Config:
 
 
 def _read_values(env_path: Path, keys: tuple[str, ...] = _KEYS) -> dict[str, str]:
+    """Settings by key. For secrets: environment variable, else Windows Credential Manager, else .env."""
     values: dict[str, str] = {}
     if env_path.is_file():
         for key, value in dotenv_values(env_path).items():
             if key in keys and value is not None:
                 values[key] = value
+    store = default_store()
+    for key in keys:
+        if key in SECRET_NAMES and (stored := store.get(key)):
+            values[key] = stored  # Credential Manager wins over the plain-text .env
     for key in keys:
         if key in os.environ:
             values[key] = os.environ[key]
     return {k: v.strip() for k, v in values.items() if v.strip()}
+
+
+def secret_source(name: str, env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> str:
+    """Where a secret currently comes from (for `jarvis --secrets status`). Never returns the value."""
+    env_path = env_path or project_root / ".env"
+    if os.environ.get(name, "").strip():
+        return "environment variable"
+    if default_store().get(name):
+        return "Windows Credential Manager"
+    if env_path.is_file() and (dotenv_values(env_path).get(name) or "").strip():
+        return ".env (plain text)"
+    return "not set"
 
 
 def _require(values: dict[str, str], key: str, env_path: Path) -> str:

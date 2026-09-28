@@ -34,6 +34,9 @@ dependencies = [
     # google-auth-oauthlib: Google sign-in (OAuth, gmail.readonly scope) for the Gmail briefing; brings
     # google-auth + requests. Apache-2.0. Imported only in src/jarvis/integrations/gmail.py.
     "google-auth-oauthlib>=1.4,<2",
+    # keyring: API keys and the Google sign-in in Windows Credential Manager (DPAPI-encrypted, per user,
+    # this computer only) instead of plain-text files. MIT. Imported only in src/jarvis/integrations/credentials.py.
+    "keyring>=25.7,<26",
 ]
 
 [project.optional-dependencies]

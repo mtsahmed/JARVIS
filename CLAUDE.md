@@ -25,7 +25,7 @@ Jarvis is a voice-first personal assistant (Python, Windows laptop). Full requir
 - External calls have timeouts and clear error messages; a failing provider must not crash Jarvis.
 
 ## Security (non-negotiable)
-- Secrets come only from `.env` via config. Never print, log, or commit them.
+- Secrets come only from Windows Credential Manager (or `.env` as a fallback) via config. Never print, log, or commit them.
 - `.env`, `.venv/`, `data/`, and `logs/` stay in `.gitignore`.
 - Every tool declares a permission tier: AUTO, CONFIRM, or BLOCKED. CONFIRM tools must get explicit user approval at runtime.
 - No tool may run arbitrary shell commands, delete files, or send messages in v1.

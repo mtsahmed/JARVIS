@@ -14,6 +14,7 @@ from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.logging_setup import setup_logging
 from jarvis.core.scheduler import ReminderScheduler
+from jarvis.integrations.credentials import default_store
 from jarvis.llm.base import LLMAdapter, LLMError
 from jarvis.llm.factory import create_embedder, create_llm
 from jarvis.memory.store import MemoryStore
@@ -92,8 +93,8 @@ def start_file_index(config: Config) -> FileIndex | None:
 
 
 def gmail_client(config: Config) -> Any:
-    """The Gmail reader, or None until the Google client file is in place (see env.example)."""
-    if not config.gmail_client_file.is_file():
+    """The Gmail reader, or None until Google is set up (client in Credential Manager or the client file)."""
+    if not (default_store().get("GOOGLE_CLIENT_ID") or config.gmail_client_file.is_file()):
         return None
     from jarvis.integrations.gmail import GmailClient  # loads Google's libraries only when set up
 
@@ -113,7 +114,7 @@ def gmail_login(config: Config) -> int:
         logger.error("Gmail sign-in failed: %s", type(e).__name__)
         print(f"Gmail sign-in did not complete ({type(e).__name__}).", file=sys.stderr)
         return 1
-    print(f"Signed in. Token saved to {config.gmail_token_file} (keep it private; it is gitignored).")
+    print("Signed in. The Gmail sign-in is saved in Windows Credential Manager.")
     return 0
 
 
@@ -152,6 +153,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="jarvis", description="Jarvis personal assistant.")
     parser.add_argument("--voice", action="store_true", help="push-to-talk voice mode (falls back to text)")
     parser.add_argument("--gmail-login", action="store_true", help="sign in to Gmail (read-only) and exit")
+    parser.add_argument("--secrets", choices=("status", "import", "set"),
+                        help="manage secrets in Windows Credential Manager and exit")
     args = parser.parse_args()
 
     try:
@@ -162,6 +165,10 @@ def main() -> int:
 
     setup_logging(config.logs_dir, secrets=config.secrets)
     logger.info("Jarvis starting: %s", config)
+    if args.secrets:
+        from jarvis.core import secrets_cli
+
+        return secrets_cli.run(args.secrets, config)
     if args.gmail_login:
         return gmail_login(config)
 
