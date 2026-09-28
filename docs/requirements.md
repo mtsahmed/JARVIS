@@ -1,6 +1,6 @@
 # Jarvis — Requirements (v0.3)
 
-Status: Phases 1–3 complete · Phase 4 (memory) current · Last updated: 2026-09-28
+Status: Phases 1–4 complete · Phase 5 (integrations & automation) current · Last updated: 2026-09-28
 Changes from v0.2: Phase 2 measurements (§9); STT model chosen; push-to-talk key set to Right Ctrl; free disk known; open items updated.
 Changes from v0.1: voice-first interaction; providers set to OpenAI (LLM), hybrid voice (local + ElevenLabs), Google search; roadmap added.
 
@@ -72,8 +72,8 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 1 | Text core ✅ | Config, OpenAI adapter, CLI chat, logging, usage tracking | Multi-turn chat works; tokens logged; no secrets in Git |
 | 2 | Voice ✅ | Push-to-talk, local STT/TTS, ElevenLabs adapter, STT benchmark | Spoken round trip works; latency and RAM measured |
 | 3 | Tools + permissions ✅ | Reminders, file search, web search tools; permission tiers; audit log | All three tools work by voice; CONFIRM flow works by voice |
-| 4 | **Memory** ← current | Persistent facts and history, semantic recall | Recalls something from a previous session |
-| 5 | Integrations & automation | Gmail read-only briefing, scheduled jobs | Morning briefing runs daily for a week |
+| 4 | Memory ✅ | Persistent facts and history, semantic recall | Recalls something from a previous session |
+| 5 | **Integrations & automation** ← current | Gmail read-only briefing, scheduled jobs | Morning briefing runs daily for a week |
 | 6 | Hardening & tests | Test suite, prompt-injection tests, threat review | Tests pass; injection test blocked |
 | 7 | Deployment & monitoring | Auto-start on login, health checks, backups, usage alerts | Survives reboot; alerts on failure or budget |
 | 8 | Expansion | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
