@@ -16,6 +16,7 @@ import psutil
 
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
+from jarvis.core.events import EventBus
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
@@ -130,7 +131,10 @@ class VoiceLoop:
         alerts: queue.Queue[str | BriefingAlert] | None = None,
         sources: Sources | None = None,
         briefing_speaker: SpeakerLike | None = None,
+        bus: EventBus | None = None,
     ) -> None:
+        self._bus = bus or EventBus()  # what Jarvis is doing, for displays such as the HUD
+        self._mode: tuple[str, str] = ("", "")  # last published (mode, detail)
         self._briefing_speaker = briefing_speaker or speaker  # premium voice where config allows
         self._sources = sources  # web search sources: shown on screen after the answer, never spoken
         self._alerts = alerts  # e.g. due reminders; spoken only while Jarvis is idle
@@ -145,6 +149,7 @@ class VoiceLoop:
 
     def run(self) -> None:
         """Loop until Ctrl+C."""
+        self._set_mode("idle")
         while True:
             event = self._next_event(timeout=1.0)
             if event is None:
@@ -159,8 +164,10 @@ class VoiceLoop:
                 except Exception:
                     logger.exception("Unexpected error during voice turn")
                     print("[error] Something went wrong. Details are in logs/jarvis.log.")
+                    self._error("internal", "Something went wrong. Details are in the log.")
             self._drain()  # ignore key presses made while Jarvis was busy
             self.speak_alerts()
+            self._set_mode("idle")
             print("\n(hold the key to talk)")
 
     def speak_alerts(self) -> None:
@@ -172,10 +179,13 @@ class VoiceLoop:
                 return
             if isinstance(alert, BriefingAlert):
                 print(f"\n[briefing]\n{alert.screen}\njarvis> {alert.spoken}")
+                self._bus.reply(alert.screen, kind="briefing")
                 self._say(alert.spoken, self._briefing_speaker)
-                continue
-            print(f"\n[reminder] {for_terminal(alert)}")
-            self._say(alert)
+            else:
+                print(f"\n[reminder] {for_terminal(alert)}")
+                self._bus.reply(alert, kind="reminder")
+                self._say(alert)
+            self._set_mode("idle")
 
     def _next_event(self, timeout: float | None = None) -> str | None:
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -191,7 +201,9 @@ class VoiceLoop:
             self._recorder.start()
         except AudioError as e:
             print(f"[error] {e}")
+            self._error("microphone", str(e))
             return None
+        self._set_mode("listening")
         print("listening...", end="", flush=True)
         self._next_event(timeout=self._max_record_seconds)  # "stop", or give up at the cap
         samples = self._recorder.stop()
@@ -200,16 +212,24 @@ class VoiceLoop:
 
     def handle_turn(self, samples: np.ndarray, ended_at: float) -> None:
         """Transcribe, ask the LLM, speak the reply. Never raises for provider failures."""
+        try:
+            self._handle_turn(samples, ended_at)
+        finally:
+            self._set_mode("idle")
+
+    def _handle_turn(self, samples: np.ndarray, ended_at: float) -> None:
         audio_seconds = samples.size / SAMPLE_RATE
         if audio_seconds < MIN_SPEECH_SECONDS:
             print("(too short - hold the key while you speak)")
             return
 
+        self._set_mode("thinking")
         started = time.perf_counter()
         try:
             transcript = self._stt.transcribe(samples)
         except STTError as e:
             print(f"[error] {e}")
+            self._error("speech_recognition", str(e))
             return
         stt_ms = _ms_since(started)
         self._usage_sink({"kind": "stt", "model": self._stt.model, "audio_seconds": round(audio_seconds, 2),
@@ -217,13 +237,14 @@ class VoiceLoop:
 
         if not transcript.text or is_filler_only(transcript.text):
             print(f"(didn't catch that{': ' + for_terminal(transcript.text) if transcript.text else ''})")
-            self._say("Sorry, I didn't catch that.")
+            self._answer("Sorry, I didn't catch that.")
             return
         print(f"you said> {for_terminal(transcript.text)}")
+        self._bus.transcript(transcript.text)
         if is_reset_request(transcript.text):
             self._session.reset()
             print("(history cleared)")
-            self._say("Okay, starting a new conversation.")
+            self._answer("Okay, starting a new conversation.")
             return
 
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
@@ -235,11 +256,13 @@ class VoiceLoop:
 
         until_speak_ms: int | None = None
         spoken = 0
+        answer: list[str] = []  # the spoken answer, for displays (fillers like "Let me check." left out)
         held: list[str] | None = None  # a briefing answer, collected to be spoken in one piece
         while (raw := self._next_sentence(sentences)) is not None:
             if isinstance(raw, Ack):
                 print(f"jarvis> {raw.text}")
                 self._say(raw.text)
+                self._set_mode("thinking")  # the slow tool is still running
                 if raw.briefing and held is None:
                     held = []
                 continue
@@ -254,6 +277,7 @@ class VoiceLoop:
                     raw.approved = self._confirm_by_voice(raw.question)
                 finally:
                     raw.done.set()  # never leave the worker waiting
+                self._set_mode("thinking")
                 continue
             if not (sentence := speakable(raw)):
                 continue  # nothing left to say once markdown is removed
@@ -262,6 +286,7 @@ class VoiceLoop:
                 print("jarvis>", end="", flush=True)
             print(f" {sentence}", end="", flush=True)
             self._say(sentence)
+            answer.append(sentence)
             spoken += 1
         if spoken:
             print()
@@ -270,22 +295,28 @@ class VoiceLoop:
             until_speak_ms = until_speak_ms or _ms_since(ended_at)
             print(f"jarvis> {' '.join(held)}")
             self._say(" ".join(held), self._briefing_speaker)
+            answer += held
             spoken += len(held)
-        if self._sources is not None and (found := self._sources.take()):
+        found = self._sources.take() if self._sources is not None else []
+        if found:
             print(format_sources(found))
+        if answer:
+            # Sent once the answer is complete: Jarvis starts speaking before the whole reply exists.
+            self._bus.reply(" ".join(answer), [{"title": r.title, "url": r.url} for r in found])
 
         if "error" in outcome:
             error = outcome["error"]
             if not isinstance(error, LLMError):
                 raise error  # unexpected bug: handled and logged by run()
             print(f"[error] {error}")
+            self._error("language_service", str(error))
             if not spoken:
                 self._say("Sorry, I couldn't reach my language service.")
             return
         if not spoken:
             until_speak_ms = _ms_since(ended_at)
             print("jarvis> (no answer)")
-            self._say("Sorry, I don't have an answer for that.")
+            self._answer("Sorry, I don't have an answer for that.")
 
         self._usage_sink({
             "kind": "voice_turn",
@@ -300,15 +331,20 @@ class VoiceLoop:
         """Main thread: read the action back, then listen for an explicit spoken yes."""
         print(f"jarvis> {for_terminal(question)} (hold the key and say yes to confirm)")
         self._say(f"{question} Say yes to confirm.")
+        self._set_mode("confirm", question)
         self._drain()  # ignore key presses made while the question was being read out
         approved = False
         if self._next_event(timeout=CONFIRM_WAIT_SECONDS) == "start" and (samples := self._record()) is not None:
+            self._set_mode("thinking")
             try:
                 answer = self._stt.transcribe(samples).text
             except STTError as e:
                 print(f"[error] {e}")
+                self._error("speech_recognition", str(e))
                 answer = ""
             print(f"you said> {for_terminal(answer) or '(nothing)'}")
+            if answer:
+                self._bus.transcript(answer)
             approved = is_yes(answer)
         else:
             print("(no answer)")
@@ -347,10 +383,28 @@ class VoiceLoop:
                 continue
 
     def _say(self, text: str, speaker: SpeakerLike | None = None) -> None:
+        self._set_mode("speaking")
         try:
             (speaker or self._speaker).speak(text)
         except TTSError as e:
             print(f"[voice error] {e}")
+            self._error("voice_output", str(e))
+
+    def _answer(self, text: str) -> None:
+        """A short fixed answer (e.g. "Sorry, I didn't catch that."): shown as the reply and spoken."""
+        self._bus.reply(text)
+        self._say(text)
+
+    def _set_mode(self, mode: str, detail: str = "") -> None:
+        """Publish a mode change (only when it changes). Main thread only."""
+        if (mode, detail) != self._mode:
+            self._mode = (mode, detail)
+            self._bus.state(mode, detail)
+
+    def _error(self, code: str, message: str) -> None:
+        """A user-visible failure: shown on displays; Jarvis carries on."""
+        self._bus.error(code, message)
+        self._set_mode("error", message)
 
 
 def _words(text: str) -> list[str]:

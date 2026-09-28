@@ -15,6 +15,7 @@ import threading
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
+from jarvis.core.events import EventBus
 from jarvis.core.instance import InstanceLock
 from jarvis.core import backup, health, usage_report
 from jarvis.core.usage_report import CostMeter, Prices
@@ -406,23 +407,45 @@ def run_jarvis(config: Config, voice: bool) -> int:
     def check_health() -> None:  # started once Jarvis is ready, so voice mode can speak a problem
         start_background_check(health_checks(config, llm, services.search, gmail, microphone=voice), alerts.problems)
 
+    bus = EventBus()  # what Jarvis is doing, for displays such as the HUD
+    hud = start_hud(config, bus)
     try:
-        if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health)):
+        if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus)):
             scheduler.start()
             check_health()
             session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
                                   memory=services.memory)
-            run_text(config, session, services.sources)
+            run_text(config, session, services.sources, bus)
     finally:
         scheduler.stop()
         services.close()  # release the database files (Windows keeps open files locked)
         meter.close()
+        if hud is not None:
+            hud.stop()
     logger.info("Jarvis stopped")
     return 0
 
 
+def start_hud(config: Config, bus: EventBus) -> Any:
+    """Start the local HUD page if JARVIS_UI_ENABLED. A HUD that can't start never stops Jarvis."""
+    if not config.ui_enabled:
+        return None
+    from jarvis.ui.server import HudServer, UIError  # only loads websockets when the HUD is on
+
+    hud = HudServer(bus, config.ui_port)
+    try:
+        hud.start()
+    except UIError as e:
+        print(f"HUD unavailable: {e}. Jarvis runs without it.")
+        logger.warning("HUD unavailable: %s", e)
+        return None
+    print(f"HUD: {hud.url}")
+    return hud
+
+
 def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
-              scheduler: ReminderScheduler, on_started: Callable[[], None] = lambda: None) -> bool:
+              scheduler: ReminderScheduler, on_started: Callable[[], None] = lambda: None,
+              bus: EventBus | None = None) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -456,7 +479,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
                      hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue,
-                     sources=services.sources, briefing_speaker=briefing_speaker)
+                     sources=services.sources, briefing_speaker=briefing_speaker, bus=bus)
     hotkey.start()
     scheduler.start()
     on_started()
@@ -471,8 +494,10 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     return True
 
 
-def run_text(config: Config, session: ChatSession, sources: Sources) -> None:
+def run_text(config: Config, session: ChatSession, sources: Sources, bus: EventBus | None = None) -> None:
+    bus = bus or EventBus()
     print(f"Jarvis ({config.llm_model}). {HELP}")
+    bus.state("idle")
     while True:
         try:
             text = input("\nyou> ").strip()
@@ -491,19 +516,29 @@ def run_text(config: Config, session: ChatSession, sources: Sources) -> None:
             print(HELP)
             continue
 
+        bus.transcript(text)
+        bus.state("thinking")
         try:
             reply = session.ask(text, confirmer=TextConfirmer())
         except LLMError as e:
             print(f"[error] {e}")
+            bus.error("language_service", str(e))
+            bus.state("idle")
             continue
         except Exception:
             logger.exception("Unexpected error during chat")
             print("[error] Something went wrong. Details are in logs/jarvis.log.")
+            bus.error("internal", "Something went wrong. Details are in the log.")
+            bus.state("idle")
             continue
 
         print(f"jarvis> {for_terminal(reply.text) or '(no reply text)'}")
-        if found := sources.take():
+        found = sources.take()
+        if found:
             print(format_sources(found))
+        if reply.text:
+            bus.reply(reply.text, [{"title": r.title, "url": r.url} for r in found])
+        bus.state("idle")
         if reply.incomplete_reason:
             print(f"  (reply cut short: {reply.incomplete_reason})")
         if reply.usage:

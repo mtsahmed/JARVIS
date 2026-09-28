@@ -37,6 +37,9 @@ dependencies = [
     # keyring: API keys and the Google sign-in in Windows Credential Manager (DPAPI-encrypted, per user,
     # this computer only) instead of plain-text files. MIT. Imported only in src/jarvis/integrations/credentials.py.
     "keyring>=25.7,<26",
+    # websockets: the local HUD server (UI-2): one WebSocket plus a few static files on 127.0.0.1.
+    # BSD-3-Clause, no dependencies of its own. Imported only in src/jarvis/ui/.
+    "websockets>=17.1,<18",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +56,10 @@ jarvis = "jarvis.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# The HUD page, styles, script and bundled fonts (UI-2).
+"jarvis.ui" = ["static/*", "static/fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -38,6 +38,8 @@ _KEYS = (
     "JARVIS_MONTHLY_BUDGET_USD",
     "JARVIS_BUDGET_WARN_PERCENT",
     "JARVIS_PRICES_FILE",
+    "JARVIS_UI_ENABLED",
+    "JARVIS_UI_PORT",
 )
 
 # Secret key required for each supported LLM provider.
@@ -77,6 +79,8 @@ class Config:
     monthly_budget_usd: float  # total monthly budget for budget alerts (owner: $5)
     budget_warn_percent: float  # warn when the month's estimated spend passes this share (owner: 80)
     prices_file: Path  # prices used to estimate OpenAI spend (with source and date)
+    ui_enabled: bool  # the local HUD page (http://127.0.0.1:<ui_port>/); off unless turned on
+    ui_port: int
     # repr=False keeps the keys out of repr()/str(), and therefore out of logs.
     llm_api_key: str = field(repr=False)
     search_api_key: str | None = field(default=None, repr=False)
@@ -160,6 +164,20 @@ def _clock_time(value: str, env_path: Path) -> time | None:
         raise ConfigError(f"JARVIS_BRIEFING_TIME must look like 07:30 (24-hour), got {value!r} (see {env_path}).") from None
 
 
+def _on_off(value: str, key: str, env_path: Path) -> bool:
+    if value.lower() in ("", "0", "false", "no", "off"):
+        return False
+    if value.lower() in ("1", "true", "yes", "on"):
+        return True
+    raise ConfigError(f"{key} must be true or false, got {value!r} (see {env_path}).")
+
+
+def _port(value: str, key: str, env_path: Path) -> int:
+    if not value.isdigit() or not 1024 <= int(value) <= 65535:
+        raise ConfigError(f"{key} must be a port number from 1024 to 65535, got {value!r} (see {env_path}).")
+    return int(value)
+
+
 def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> Config:
     """Build a validated Config. Raises ConfigError with a clear message on problems."""
     env_path = env_path or project_root / ".env"
@@ -204,6 +222,8 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         budget_warn_percent=float(_positive_number({"JARVIS_BUDGET_WARN_PERCENT": "80", **values},
                                                    "JARVIS_BUDGET_WARN_PERCENT", env_path, float)),
         prices_file=_resolve_dir(values.get("JARVIS_PRICES_FILE", "config/prices.json"), project_root),
+        ui_enabled=_on_off(values.get("JARVIS_UI_ENABLED", ""), "JARVIS_UI_ENABLED", env_path),
+        ui_port=_port(values.get("JARVIS_UI_PORT", "47821"), "JARVIS_UI_PORT", env_path),
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
         search_api_key=search_api_key,
     )

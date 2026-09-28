@@ -1,0 +1,14 @@
+HUD fonts, bundled so the HUD works offline (docs/ui-design.md). Both are SIL Open Font License 1.1
+(full texts beside this file). Latin subset, WOFF2, downloaded 2026-09-28 from the Fontsource npm
+packages via jsDelivr:
+
+rajdhani-600.woff2        @fontsource/rajdhani@5.3.0       files/rajdhani-latin-600-normal.woff2
+  sha256 433a7007e4747a02a790167a6efa2625855f013970ba49b9b739a5d3db8b2601
+rajdhani-700.woff2        @fontsource/rajdhani@5.3.0       files/rajdhani-latin-700-normal.woff2
+  sha256 5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f
+ibm-plex-mono-400.woff2   @fontsource/ibm-plex-mono@5.3.0  files/ibm-plex-mono-latin-400-normal.woff2
+  sha256 08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7
+ibm-plex-mono-500.woff2   @fontsource/ibm-plex-mono@5.3.0  files/ibm-plex-mono-latin-500-normal.woff2
+  sha256 01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22
+
+OFL-Rajdhani.txt, OFL-IBM-Plex-Mono.txt: the LICENSE files of the same package versions.
