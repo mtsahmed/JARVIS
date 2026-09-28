@@ -13,6 +13,7 @@ import threading
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
+from jarvis.core.instance import InstanceLock
 from jarvis.core.logging_setup import setup_logging
 from jarvis.core.scheduler import ReminderScheduler
 from jarvis.integrations.credentials import default_store
@@ -161,6 +162,8 @@ def main() -> int:
     parser.add_argument("--gmail-login", action="store_true", help="sign in to Gmail (read-only) and exit")
     parser.add_argument("--secrets", choices=("status", "import", "set"),
                         help="manage secrets in Windows Credential Manager and exit")
+    parser.add_argument("--autostart", choices=("on", "off", "status"),
+                        help="start Jarvis (voice, minimized) when you sign in to Windows, and exit")
     args = parser.parse_args()
 
     try:
@@ -177,7 +180,39 @@ def main() -> int:
         return secrets_cli.run(args.secrets, config)
     if args.gmail_login:
         return gmail_login(config)
+    if args.autostart:
+        return autostart_command(args.autostart, config)
 
+    # One Jarvis at a time: a second copy would also answer the talk key and repeat alerts.
+    lock = InstanceLock(config.data_dir / "jarvis.lock")
+    if not lock.acquire():
+        print("Jarvis is already running (look for its window on the taskbar).")
+        logger.info("Second Jarvis not started: another one is running")
+        return 0  # not an error: the auto-start launcher must not restart it
+    try:
+        return run_jarvis(config, args.voice)
+    finally:
+        lock.release()
+
+
+def autostart_command(action: str, config: Config) -> int:
+    from jarvis.integrations import autostart
+
+    if action == "on":
+        try:
+            entry = autostart.enable(config.project_root)
+        except (FileNotFoundError, FileExistsError) as e:
+            print(f"Auto-start not enabled: {e}", file=sys.stderr)
+            return 1
+        print(f"Auto-start is on: Jarvis voice mode starts minimized when you sign in.\n  entry: {entry}")
+    elif action == "off":
+        print("Auto-start is off." if autostart.disable() else "Auto-start was not on.")
+    else:
+        print(f"Auto-start: {autostart.status(config.project_root)}")
+    return 0
+
+
+def run_jarvis(config: Config, voice: bool) -> int:
     try:
         llm = create_llm(config)
     except LLMError as e:
@@ -197,7 +232,7 @@ def main() -> int:
                              lambda: alerts.briefing(services.briefer.compose()), JobState(config.data_dir / "jarvis.db")))
     scheduler = ReminderScheduler(services.store, alerts, daily_jobs=jobs)
     try:
-        if not (args.voice and run_voice(config, llm, services, alerts, scheduler)):
+        if not (voice and run_voice(config, llm, services, alerts, scheduler)):
             scheduler.start()
             session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
                                   memory=services.memory)
