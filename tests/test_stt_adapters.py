@@ -144,3 +144,40 @@ def test_factory_builds_cloud_with_lazy_local_fallback(tmp_path: Any) -> None:
     # a benchmark override measures the cloud model alone
     assert isinstance(create_stt(config, model="gpt-4o-mini-transcribe", provider="openai", api_key="sk-test"),
                       OpenAITranscribeAdapter)
+
+
+# --- Phase 6E: skip the cloud for a while after it fails ------------------------------------------------
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_after_a_failure_the_cloud_is_skipped_during_the_cooldown() -> None:
+    cloud, local, clock = FakeSTT("cloud", fail=True), FakeSTT("base.en", "local"), Clock()
+    stt = FallbackSTT(cloud, lambda: local, cooldown_seconds=180, clock=clock)
+    stt.transcribe(ONE_SECOND)  # cloud fails once -> local
+    clock.now += 60
+    assert stt.transcribe(ONE_SECOND).text == "local"
+    assert cloud.calls == 1  # not retried within the cooldown: no second wait for a timeout
+    assert local.calls == 2
+
+
+def test_cloud_is_tried_again_after_the_cooldown_and_recovers() -> None:
+    cloud, local, clock = FakeSTT("cloud", "from cloud", fail=True), FakeSTT("base.en", "local"), Clock()
+    stt = FallbackSTT(cloud, lambda: local, cooldown_seconds=180, clock=clock)
+    stt.transcribe(ONE_SECOND)
+    clock.now += 181
+    cloud._fail = False  # network is back
+    assert stt.transcribe(ONE_SECOND).text == "from cloud" and stt.model == "cloud"
+    clock.now += 1
+    assert stt.transcribe(ONE_SECOND).text == "from cloud" and cloud.calls == 3
+
+
+def test_cloud_timeout_is_short_enough_for_voice() -> None:
+    adapter = OpenAITranscribeAdapter("sk-test", "gpt-4o-mini-transcribe")
+    assert adapter._timeout == 8.0

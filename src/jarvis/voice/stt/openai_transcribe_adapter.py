@@ -22,7 +22,8 @@ SAMPLE_RATE = 16_000
 
 
 class OpenAITranscribeAdapter:
-    def __init__(self, api_key: str, model: str, timeout_seconds: float = 15.0, prompt: str | None = None) -> None:
+    # 8 s: the slowest of the owner's 10 benchmark clips took 2.8 s; a hung network should not stall a voice turn.
+    def __init__(self, api_key: str, model: str, timeout_seconds: float = 8.0, prompt: str | None = None) -> None:
         self._model = model
         self._prompt = prompt
         self._timeout = timeout_seconds
