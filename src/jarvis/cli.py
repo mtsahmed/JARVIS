@@ -16,6 +16,7 @@ from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.events import EventBus
+from jarvis.core.inbox import END, Inbox, Typed
 from jarvis.core.instance import InstanceLock
 from jarvis.core import backup, health, usage_report
 from jarvis.core.usage_report import CostMeter, Prices
@@ -40,16 +41,76 @@ logger = logging.getLogger(__name__)
 HELP = "Commands: /reset clears history, /exit quits."
 
 
+EXIT_COMMANDS = ("/exit", "/quit")
+
+
+class TerminalReader:
+    """Text mode: reads terminal lines on a background thread into the Inbox, so the terminal and the
+    HUD's text box can both send requests. It reads one line each time it is asked (so its prompt
+    never lands in the middle of a reply) and stops after /exit or the end of input."""
+
+    def __init__(self, inbox: Inbox) -> None:
+        self._inbox = inbox
+        self._wanted = threading.Event()
+        self._prompt = ""
+        self.reading = False
+        threading.Thread(target=self._run, name="terminal-input", daemon=True).start()
+
+    def request(self, prompt: str) -> None:
+        """Read the next line (unless a read is already waiting for the user)."""
+        if not self.reading:
+            self._prompt = prompt
+            self._wanted.set()
+
+    def _run(self) -> None:
+        while True:
+            self._wanted.wait()
+            self.reading = True
+            self._wanted.clear()
+            try:
+                line = input(self._prompt)
+            except (EOFError, KeyboardInterrupt):
+                self._inbox.queue.put(END)
+                return
+            finally:
+                self.reading = False
+            self._inbox.queue.put(Typed(line, "terminal"))
+            if line.strip() in EXIT_COMMANDS:
+                return
+
+
+def next_typed(inbox: Inbox) -> Typed | None:
+    """The next typed request (terminal or HUD), or None at the end of input. Talk-key events are
+    ignored: text mode has no microphone."""
+    while True:
+        try:
+            item = inbox.queue.get(timeout=0.2)  # timeout keeps Ctrl+C responsive on Windows
+        except queue.Empty:
+            continue
+        if item == END:
+            inbox.queue.put(END)  # also ends the main loop
+            return None
+        if isinstance(item, Typed):
+            return item
+
+
 class TextConfirmer:
-    """Asks in the terminal before a CONFIRM-tier action. Only y/yes approves; anything else is no."""
+    """Asks before a CONFIRM-tier action; the answer is typed in the terminal or the HUD.
+    Only y/yes approves; anything else, or the end of input, is no."""
+
+    def __init__(self, inbox: Inbox, reader: TerminalReader) -> None:
+        self._inbox, self._reader = inbox, reader
 
     def confirm(self, question: str) -> bool:
-        try:
-            answer = input(f"jarvis> {for_terminal(question)} [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        print(f"jarvis> {for_terminal(question)} [y/N]")
+        self._reader.request("  your answer> ")
+        answer = next_typed(self._inbox)
+        if answer is None:
             print()
             return False
-        return answer in ("y", "yes")
+        if answer.source == "hud":
+            print(f"  (answered on the HUD) {for_terminal(answer.text)}")
+        return answer.text.strip().lower() in ("y", "yes")
 
 
 @dataclass
@@ -408,14 +469,16 @@ def run_jarvis(config: Config, voice: bool) -> int:
         start_background_check(health_checks(config, llm, services.search, gmail, microphone=voice), alerts.problems)
 
     bus = EventBus()  # what Jarvis is doing, for displays such as the HUD
+    inbox = Inbox()  # talk-key events and typed requests (terminal; the HUD from UI-3C)
     hud = start_hud(config, bus)
     try:
-        if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus)):
+        if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus,
+                                    inbox=inbox)):
             scheduler.start()
             check_health()
             session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
                                   memory=services.memory)
-            run_text(config, session, services.sources, bus)
+            run_text(config, session, services.sources, bus, inbox)
     finally:
         scheduler.stop()
         services.close()  # release the database files (Windows keeps open files locked)
@@ -445,7 +508,7 @@ def start_hud(config: Config, bus: EventBus) -> Any:
 
 def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
               scheduler: ReminderScheduler, on_started: Callable[[], None] = lambda: None,
-              bus: EventBus | None = None) -> bool:
+              bus: EventBus | None = None, inbox: Inbox | None = None) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -468,7 +531,8 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
         stt = create_stt(voice, api_key=config.llm_api_key)
         speaker = create_speaker(voice, purpose="reply")
         briefing_speaker = create_speaker(voice, purpose="briefing")  # ElevenLabs where JARVIS_ELEVENLABS_USE_FOR allows
-        hotkey = HotkeyListener(voice.ptt_key)
+        inbox = inbox or Inbox()
+        hotkey = HotkeyListener(voice.ptt_key, events=inbox.queue)
     except (ConfigError, STTError, TTSError, AudioError, ValueError) as e:
         print(f"Voice mode unavailable: {e}\nFalling back to text chat.\n")
         logger.warning("Voice mode unavailable: %s", e)
@@ -477,8 +541,8 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     session = ChatSession(llm, history_turns=config.history_turns, instructions=VOICE_INSTRUCTIONS,
                           tools=services.build_tools(), memory=services.memory)
     alerts.voice_queue = queue.Queue()
-    loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
-                     hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue,
+    loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), inbox.queue,
+                     voice.max_record_seconds, alerts=alerts.voice_queue,
                      sources=services.sources, briefing_speaker=briefing_speaker, bus=bus)
     hotkey.start()
     scheduler.start()
@@ -494,55 +558,68 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     return True
 
 
-def run_text(config: Config, session: ChatSession, sources: Sources, bus: EventBus | None = None) -> None:
-    bus = bus or EventBus()
+def run_text(config: Config, session: ChatSession, sources: Sources, bus: EventBus | None = None,
+             inbox: Inbox | None = None) -> None:
+    """Text chat. Requests come from the terminal or the HUD's text box (the Inbox). Commands like
+    /exit work only from the terminal: the HUD cannot stop Jarvis."""
+    bus, inbox = bus or EventBus(), inbox or Inbox()
+    reader = TerminalReader(inbox)
+    confirmer = TextConfirmer(inbox, reader)
     print(f"Jarvis ({config.llm_model}). {HELP}")
     bus.state("idle")
-    while True:
-        try:
-            text = input("\nyou> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
-        if not text:
-            continue
-        if text in ("/exit", "/quit"):
-            break
-        if text == "/reset":
-            session.reset()
-            print("(history cleared)")
-            continue
-        if text.startswith("/"):
-            print(HELP)
-            continue
+    try:
+        while True:
+            reader.request("\nyou> ")
+            item = next_typed(inbox)
+            if item is None:
+                print()
+                break
+            text = item.text.strip()
+            if item.source == "hud":
+                print(f"\nyou (HUD)> {for_terminal(text)}")
+            elif text in EXIT_COMMANDS:
+                break
+            elif text == "/reset":
+                session.reset()
+                print("(history cleared)")
+                continue
+            elif text.startswith("/"):
+                print(HELP)
+                continue
+            if text:
+                _text_turn(text, session, sources, bus, confirmer)
+    except KeyboardInterrupt:
+        print()
 
-        bus.transcript(text)
-        bus.state("thinking")
-        try:
-            reply = session.ask(text, confirmer=TextConfirmer())
-        except LLMError as e:
-            print(f"[error] {e}")
-            bus.error("language_service", str(e))
-            bus.state("idle")
-            continue
-        except Exception:
-            logger.exception("Unexpected error during chat")
-            print("[error] Something went wrong. Details are in logs/jarvis.log.")
-            bus.error("internal", "Something went wrong. Details are in the log.")
-            bus.state("idle")
-            continue
 
-        print(f"jarvis> {for_terminal(reply.text) or '(no reply text)'}")
-        found = sources.take()
-        if found:
-            print(format_sources(found))
-        if reply.text:
-            bus.reply(reply.text, [{"title": r.title, "url": r.url} for r in found])
+def _text_turn(text: str, session: ChatSession, sources: Sources, bus: EventBus, confirmer: TextConfirmer) -> None:
+    bus.transcript(text)
+    bus.state("thinking")
+    try:
+        reply = session.ask(text, confirmer=confirmer)
+    except LLMError as e:
+        print(f"[error] {e}")
+        bus.error("language_service", str(e))
         bus.state("idle")
-        if reply.incomplete_reason:
-            print(f"  (reply cut short: {reply.incomplete_reason})")
-        if reply.usage:
-            print(f"  [{reply.usage.input_tokens} in / {reply.usage.output_tokens} out tokens]")
+        return
+    except Exception:
+        logger.exception("Unexpected error during chat")
+        print("[error] Something went wrong. Details are in logs/jarvis.log.")
+        bus.error("internal", "Something went wrong. Details are in the log.")
+        bus.state("idle")
+        return
+
+    print(f"jarvis> {for_terminal(reply.text) or '(no reply text)'}")
+    found = sources.take()
+    if found:
+        print(format_sources(found))
+    if reply.text:
+        bus.reply(reply.text, [{"title": r.title, "url": r.url} for r in found])
+    bus.state("idle")
+    if reply.incomplete_reason:
+        print(f"  (reply cut short: {reply.incomplete_reason})")
+    if reply.usage:
+        print(f"  [{reply.usage.input_tokens} in / {reply.usage.output_tokens} out tokens]")
 
 
 if __name__ == "__main__":

@@ -118,8 +118,11 @@ def feed(monkeypatch: pytest.MonkeyPatch, *lines: str) -> None:
 
 @pytest.mark.parametrize(("typed", "approved"), [("y", True), ("YES", True), ("", False), ("no", False), (None, False)])
 def test_text_confirmer_only_explicit_yes(monkeypatch: pytest.MonkeyPatch, typed: str | None, approved: bool) -> None:
+    from jarvis.core.inbox import Inbox
+
     feed(monkeypatch, *([] if typed is None else [typed]))  # None = end of input
-    assert cli.TextConfirmer().confirm("Open x.pdf?") is approved
+    inbox = Inbox()
+    assert cli.TextConfirmer(inbox, cli.TerminalReader(inbox)).confirm("Open x.pdf?") is approved
 
 
 def test_text_loop_commands_errors_and_sources(config, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # type: ignore[no-untyped-def]

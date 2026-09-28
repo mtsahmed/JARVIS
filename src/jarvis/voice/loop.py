@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -17,6 +18,7 @@ import psutil
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.events import EventBus
+from jarvis.core.inbox import Item, Typed
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
@@ -124,8 +126,7 @@ class VoiceLoop:
         stt: STTAdapter,
         speaker: SpeakerLike,
         recorder: RecorderLike,
-        events: queue.Queue[str],
-        drain: Callable[[], None],
+        events: queue.Queue[Item],
         max_record_seconds: float,
         usage_sink: Callable[[dict[str, Any]], None] = log_usage,
         alerts: queue.Queue[str | BriefingAlert] | None = None,
@@ -142,8 +143,8 @@ class VoiceLoop:
         self._stt = stt
         self._speaker = speaker
         self._recorder = recorder
-        self._events = events
-        self._drain = drain
+        self._events = events  # the Inbox's queue: talk-key events and typed requests
+        self._pending: deque[Typed] = deque()  # typed requests that arrived while recording
         self._max_record_seconds = max_record_seconds
         self._usage_sink = usage_sink
 
@@ -155,17 +156,23 @@ class VoiceLoop:
             if event is None:
                 self.speak_alerts()
                 continue
-            if event != "start":
-                continue
-            samples = self._record()
-            if samples is not None:
-                try:
-                    self.handle_turn(samples, ended_at=time.perf_counter())
-                except Exception:
-                    logger.exception("Unexpected error during voice turn")
-                    print("[error] Something went wrong. Details are in logs/jarvis.log.")
-                    self._error("internal", "Something went wrong. Details are in the log.")
-            self._drain()  # ignore key presses made while Jarvis was busy
+            if isinstance(event, Typed):
+                turn: Callable[[], None] = lambda text=event.text: self.handle_typed(text)
+            elif event == "start":
+                samples = self._record()
+                if samples is None:
+                    self._set_mode("idle")
+                    continue
+                turn = lambda samples=samples: self.handle_turn(samples, ended_at=time.perf_counter())
+            else:
+                continue  # a stray "stop"/"cancel"
+            try:
+                turn()
+            except Exception:
+                logger.exception("Unexpected error during voice turn")
+                print("[error] Something went wrong. Details are in logs/jarvis.log.")
+                self._error("internal", "Something went wrong. Details are in the log.")
+            self._drain_keys()  # ignore key presses made while Jarvis was busy (typed requests stay)
             self.speak_alerts()
             self._set_mode("idle")
             print("\n(hold the key to talk)")
@@ -187,16 +194,35 @@ class VoiceLoop:
                 self._say(alert)
             self._set_mode("idle")
 
-    def _next_event(self, timeout: float | None = None) -> str | None:
+    def _next_event(self, timeout: float | None = None, keys_only: bool = False) -> Item | None:
+        """The next talk-key event or typed request (None on timeout). With keys_only, typed requests
+        are kept for later instead of returned."""
+        if self._pending and not keys_only:
+            return self._pending.popleft()
         deadline = None if timeout is None else time.monotonic() + timeout
         while deadline is None or time.monotonic() < deadline:
             try:
-                return self._events.get(timeout=_POLL_SECONDS)
+                event = self._events.get(timeout=_POLL_SECONDS)
             except queue.Empty:
                 continue
+            if isinstance(event, Typed) and keys_only:
+                self._pending.append(event)
+                continue
+            return event
         return None
 
+    def _drain_keys(self) -> None:
+        """Drop talk-key events that arrived while Jarvis was busy; keep typed requests for later."""
+        while True:
+            try:
+                event = self._events.get_nowait()
+            except queue.Empty:
+                return
+            if isinstance(event, Typed):
+                self._pending.append(event)
+
     def _record(self) -> np.ndarray | None:
+        """Record until "stop" (or the time cap). None if it could not start or was cancelled."""
         try:
             self._recorder.start()
         except AudioError as e:
@@ -205,10 +231,29 @@ class VoiceLoop:
             return None
         self._set_mode("listening")
         print("listening...", end="", flush=True)
-        self._next_event(timeout=self._max_record_seconds)  # "stop", or give up at the cap
+        deadline = time.monotonic() + self._max_record_seconds
+        event: Item | None = None
+        while event not in ("stop", "cancel") and (left := deadline - time.monotonic()) > 0:
+            event = self._next_event(timeout=left, keys_only=True)  # a repeated "start" is ignored
         samples = self._recorder.stop()
+        if event == "cancel":
+            print(" cancelled")
+            return None
         print(" done")
         return samples
+
+    def handle_typed(self, text: str) -> None:
+        """A typed request (terminal or HUD): handled like a spoken one, reply spoken aloud."""
+        try:
+            print(f"you typed> {for_terminal(text)}")
+            self._bus.transcript(text)
+            self._set_mode("thinking")
+            if is_reset_request(text):
+                self._reset()
+                return
+            self._respond(text, ended_at=time.perf_counter(), stt_ms=0, typed=True)
+        finally:
+            self._set_mode("idle")
 
     def handle_turn(self, samples: np.ndarray, ended_at: float) -> None:
         """Transcribe, ask the LLM, speak the reply. Never raises for provider failures."""
@@ -242,16 +287,22 @@ class VoiceLoop:
         print(f"you said> {for_terminal(transcript.text)}")
         self._bus.transcript(transcript.text)
         if is_reset_request(transcript.text):
-            self._session.reset()
-            print("(history cleared)")
-            self._answer("Okay, starting a new conversation.")
+            self._reset()
             return
+        self._respond(transcript.text, ended_at, stt_ms)
 
+    def _reset(self) -> None:
+        self._session.reset()
+        print("(history cleared)")
+        self._answer("Okay, starting a new conversation.")
+
+    def _respond(self, text: str, ended_at: float, stt_ms: int, typed: bool = False) -> None:
+        """Ask the LLM about `text` and speak the answer as it streams in."""
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
         # is complete, so Jarvis starts talking while the rest of the reply is still being written.
         sentences: queue.Queue[str | Ack | ConfirmRequest | None] = queue.Queue()
         outcome: dict[str, Any] = {}
-        worker = threading.Thread(target=self._stream_reply, args=(transcript.text, sentences, outcome), daemon=True)
+        worker = threading.Thread(target=self._stream_reply, args=(text, sentences, outcome), daemon=True)
         worker.start()
 
         until_speak_ms: int | None = None
@@ -320,6 +371,7 @@ class VoiceLoop:
 
         self._usage_sink({
             "kind": "voice_turn",
+            "input": "typed" if typed else "voice",
             "stt_ms": stt_ms,
             "llm_ms": outcome["llm_ms"],  # full reply, start to finish
             "until_speak_ms": until_speak_ms,  # end of speech -> first sentence handed to TTS
@@ -328,26 +380,34 @@ class VoiceLoop:
         })
 
     def _confirm_by_voice(self, question: str) -> bool:
-        """Main thread: read the action back, then listen for an explicit spoken yes."""
+        """Main thread: read the action back, then wait for an explicit yes, spoken or typed."""
         print(f"jarvis> {for_terminal(question)} (hold the key and say yes to confirm)")
         self._say(f"{question} Say yes to confirm.")
         self._set_mode("confirm", question)
-        self._drain()  # ignore key presses made while the question was being read out
-        approved = False
-        if self._next_event(timeout=CONFIRM_WAIT_SECONDS) == "start" and (samples := self._record()) is not None:
-            self._set_mode("thinking")
-            try:
-                answer = self._stt.transcribe(samples).text
-            except STTError as e:
-                print(f"[error] {e}")
-                self._error("speech_recognition", str(e))
-                answer = ""
-            print(f"you said> {for_terminal(answer) or '(nothing)'}")
+        # Typed requests queued before the question are not answers to it: set them aside.
+        earlier, self._pending = self._pending, deque()
+        try:
+            self._drain_keys()  # ignore key presses made while the question was being read out
+            answer = ""
+            event = self._next_event(timeout=CONFIRM_WAIT_SECONDS)
+            if isinstance(event, Typed):
+                answer = event.text
+                print(f"you typed> {for_terminal(answer)}")
+            elif event == "start" and (samples := self._record()) is not None:
+                self._set_mode("thinking")
+                try:
+                    answer = self._stt.transcribe(samples).text
+                except STTError as e:
+                    print(f"[error] {e}")
+                    self._error("speech_recognition", str(e))
+                print(f"you said> {for_terminal(answer) or '(nothing)'}")
+            else:
+                print("(no answer)")
             if answer:
                 self._bus.transcript(answer)
             approved = is_yes(answer)
-        else:
-            print("(no answer)")
+        finally:
+            self._pending.extendleft(reversed(earlier))
         self._say("Okay." if approved else "Okay, I won't.")
         return approved
 

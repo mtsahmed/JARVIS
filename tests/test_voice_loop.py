@@ -1,5 +1,6 @@
 import json
 import queue
+import threading
 import time
 from collections.abc import Sequence
 from typing import Any
@@ -67,7 +68,7 @@ def make(stt: FakeSTT | None = None, llm: FakeLLM | None = None, speaker: FakeSp
     stt, llm, speaker = stt or FakeSTT(), llm or FakeLLM(), speaker or FakeSpeaker()
     records: list[dict[str, Any]] = []
     session = ChatSession(llm, history_turns=5, usage_sink=records.append)
-    loop = VoiceLoop(session, stt, speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+    loop = VoiceLoop(session, stt, speaker, recorder=None, events=queue.Queue(),
                      max_record_seconds=30, usage_sink=records.append)
     return loop, stt, llm, speaker, records
 
@@ -252,10 +253,20 @@ def make_confirming(answer_text: str, key_events: list[str]):  # type: ignore[no
                                   handler=lambda a: opened.append(a["path"]) or "opened",
                                   describe=lambda a: f"Open {a['path']}?")], audit_sink=lambda r: None)
     events: queue.Queue[str] = queue.Queue()
-    speaker = FakeSpeaker()
+
+    class AnsweringSpeaker(FakeSpeaker):
+        """The user presses the key only after hearing the question (earlier presses are ignored)."""
+
+        def speak(self, text: str) -> str:
+            result = super().speak(text)
+            if text.endswith("Say yes to confirm.") and key_events:
+                threading.Timer(0.3, lambda: [events.put(e) for e in key_events]).start()
+            return result
+
+    speaker = AnsweringSpeaker()
     stt = FakeSTT("open my budget")
     session = ChatSession(ConfirmingLLM(), history_turns=5, usage_sink=lambda r: None, tools=registry)
-    loop = VoiceLoop(session, stt, speaker, FakeRecorder(), events, drain=lambda: None, max_record_seconds=5,
+    loop = VoiceLoop(session, stt, speaker, FakeRecorder(), events, max_record_seconds=5,
                      usage_sink=lambda r: None)
 
     original = stt.transcribe
@@ -266,8 +277,6 @@ def make_confirming(answer_text: str, key_events: list[str]):  # type: ignore[no
         return original(samples)
 
     stt.transcribe = transcribe  # type: ignore[method-assign]
-    for event in key_events:
-        events.put(event)
     return loop, speaker, opened
 
 
@@ -307,7 +316,7 @@ def test_queued_reminder_spoken_between_turns() -> None:
     alerts: queue.Queue[str] = queue.Queue()
     speaker = FakeSpeaker()
     session = ChatSession(FakeLLM(), history_turns=5, usage_sink=lambda r: None)
-    loop = VoiceLoop(session, FakeSTT(), speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+    loop = VoiceLoop(session, FakeSTT(), speaker, recorder=None, events=queue.Queue(),
                      max_record_seconds=5, usage_sink=lambda r: None, alerts=alerts)
     alerts.put("Reminder: stretch")
     loop.speak_alerts()
@@ -337,7 +346,7 @@ def make_searching(tool_tier_auto: bool = True):  # type: ignore[no-untyped-def]
     records: list[dict[str, Any]] = []
     session = ChatSession(SearchingLLM(), history_turns=5, usage_sink=lambda r: None, tools=registry)
     speaker = FakeSpeaker()
-    loop = VoiceLoop(session, FakeSTT("weather?"), speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+    loop = VoiceLoop(session, FakeSTT("weather?"), speaker, recorder=None, events=queue.Queue(),
                      max_record_seconds=5, usage_sink=records.append)
     return loop, speaker, records
 
