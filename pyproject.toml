@@ -31,6 +31,9 @@ dependencies = [
     # pypdf: text extraction from PDFs for file search/reading (BSD-3-Clause, pure Python, no native DLLs);
     # imported only in src/jarvis/tools/file_text.py.
     "pypdf>=6.19,<7",
+    # google-auth-oauthlib: Google sign-in (OAuth, gmail.readonly scope) for the Gmail briefing; brings
+    # google-auth + requests. Apache-2.0. Imported only in src/jarvis/integrations/gmail.py.
+    "google-auth-oauthlib>=1.4,<2",
 ]
 
 [project.optional-dependencies]

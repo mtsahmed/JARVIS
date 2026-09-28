@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from typing import Protocol
 from datetime import datetime, timedelta
 
 from jarvis.tools.reminders import Clock, Reminder, ReminderStore, local_now
@@ -18,9 +19,14 @@ MISSED_AFTER = timedelta(minutes=1)
 OnDue = Callable[[Reminder, bool], None]  # (reminder, missed)
 
 
+class DailyJobLike(Protocol):
+    def tick(self) -> bool: ...
+
+
 class ReminderScheduler:
     def __init__(self, store: ReminderStore, on_due: OnDue, clock: Clock = local_now,
-                 check_seconds: float = CHECK_SECONDS) -> None:
+                 check_seconds: float = CHECK_SECONDS, daily_jobs: Sequence[DailyJobLike] = ()) -> None:
+        self._daily_jobs = tuple(daily_jobs)  # e.g. the morning briefing
         self._store = store
         self._on_due = on_due
         self._clock = clock
@@ -53,6 +59,8 @@ class ReminderScheduler:
         while True:
             try:
                 self.check_now()
+                for job in self._daily_jobs:
+                    job.tick()
             except Exception:
                 logger.exception("Reminder check failed")
             if self._stop.wait(self._check_seconds):

@@ -79,10 +79,11 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 8 | Expansion | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
 
 ## 8. Open items
-- Definition of "important" emails for the briefing
 - Voice latency still slightly above the 3 s target (median 3.2 s with streaming). Remaining time is the LLM's time to its first sentence (most voice replies are one sentence). Options: reasoning effort `minimal` on gpt-5-mini, or accept ~3 s
 - Real answers to live-data questions (prices, market caps, news) need the web search tool (Phase 3, UC3); until then Jarvis states its knowledge date
 - ElevenLabs Default voices expire 2026-12-31: switch `JARVIS_ELEVENLABS_VOICE_ID` to a replacement voice before then (Jarvis falls back to the local voice if it stops working)
+- Phase 6: move the Google OAuth client and token files (`data/google_client.json`, `data/google_token.json`) into Windows Credential Manager (owner-approved exception to secrets-only-in-.env)
+- Gmail tokens expire every 7 days while the Google project is in Testing mode (personal Gmail): re-run `jarvis --gmail-login` weekly
 - Phase 6 threat review: AUTO tools can be triggered by injected text if the model is ever hijacked (create_reminder: nuisance; web_search: could send private text to Tavily in the query). Not observed in testing; option: require approval for web searches in a turn after a file was read
 - Web questions take 5-10 s in voice mode (search round trips plus answer); Jarvis says "Let me check." at once to cover the wait
 - Optional: if a hanging network makes offline voice turns slow (cloud STT timeout 15 s), skip the cloud for a few minutes after a failure
@@ -167,4 +168,14 @@ Local errors were on non-reminder commands ("Open" → "On", "car insurance" →
 - Recall: with 20 or fewer memories all are given to the model (no extra call); with more, OpenAI `text-embedding-3-small` picks the 8 most similar (similarity >= 0.25). Measured: related fact/question ~0.45, unrelated ~0.1-0.2; lookup ~250 ms.
 - Identical facts are not duplicated; similar facts are kept side by side and the model is told about the older one (silent merging could lose a different fact).
 - Live check (gpt-5-mini): facts saved in session 1 were recalled in session 2 from differently worded questions; listing and forgetting (after yes) worked; with 22 memories, recall found insurance, allergy and pet facts. Done-when met.
+
+## 12. Phase 5 design (2026-09-28)
+
+**Owner decisions:** personal Gmail; Gmail API with `gmail.readonly` (Google itself blocks sending, deleting, marking read); "important" = `is:unread is:important category:primary newer_than:1d` (up to 10); ElevenLabs voice for the briefing with Windows voice fallback; OAuth token kept as a file in `data/` (exception to secrets-only-in-.env, to move to Credential Manager in Phase 6).
+
+- **Scheduled briefing:** daily at `JARVIS_BRIEFING_TIME` (07:30), once per day (state in `data/jarvis.db`); if Jarvis starts later, at the first check after start. Only scheduled once Gmail is set up. Runs in its own thread so reminders are never delayed.
+- **Content:** important unread emails (sender, subject, time; up to 1,500 characters of text sent to the LLM only to summarize, never stored) and today's reminders; spoken summary in 3-6 sentences, details on screen, desktop notification.
+- **On demand:** `morning_briefing` tool (AUTO, read-only, audited without email text); voice says "Let me check your inbox." and speaks the answer in one piece with the premium voice.
+- **Sign-in:** `jarvis --gmail-login` (browser, read-only consent); expired or missing sign-in is reported plainly ("Run: jarvis --gmail-login").
+- Tests: 16 (Gmail parsing and query with faked HTTP, 401/expiry, briefing composition, LLM failure fallback, audit privacy, once-a-day job incl. restart and failure, premium voice delivery).
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, time
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -29,6 +30,9 @@ _KEYS = (
     "JARVIS_SEARCH_PROVIDER",
     "TAVILY_API_KEY",
     "JARVIS_EMBEDDING_MODEL",
+    "JARVIS_GMAIL_CLIENT_FILE",
+    "JARVIS_GMAIL_TOKEN_FILE",
+    "JARVIS_BRIEFING_TIME",
 )
 
 # Secret key required for each supported LLM provider.
@@ -60,6 +64,11 @@ class Config:
     reasoning_effort: str | None
     search_provider: str | None  # web search provider; None = web search off
     embedding_model: str | None  # for memory recall; None = no smart recall (most recent memories are used)
+    # Gmail briefing. The OAuth client and token are files (the token refreshes itself), kept in the
+    # gitignored data folder; only their paths are configured here.
+    gmail_client_file: Path
+    gmail_token_file: Path
+    briefing_time: time | None  # daily briefing (local time); None = no scheduled briefing
     # repr=False keeps the keys out of repr()/str(), and therefore out of logs.
     llm_api_key: str = field(repr=False)
     search_api_key: str | None = field(default=None, repr=False)
@@ -117,6 +126,15 @@ def _existing_dirs(value: str, env_path: Path) -> tuple[Path, ...]:
     return tuple(dirs)
 
 
+def _clock_time(value: str, env_path: Path) -> time | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError:
+        raise ConfigError(f"JARVIS_BRIEFING_TIME must look like 07:30 (24-hour), got {value!r} (see {env_path}).") from None
+
+
 def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT) -> Config:
     """Build a validated Config. Raises ConfigError with a clear message on problems."""
     env_path = env_path or project_root / ".env"
@@ -153,6 +171,9 @@ def load_config(env_path: Path | None = None, project_root: Path = PROJECT_ROOT)
         reasoning_effort=reasoning_effort,
         search_provider=search_provider,
         embedding_model=values.get("JARVIS_EMBEDDING_MODEL"),
+        gmail_client_file=_resolve_dir(values.get("JARVIS_GMAIL_CLIENT_FILE", "data/google_client.json"), project_root),
+        gmail_token_file=_resolve_dir(values.get("JARVIS_GMAIL_TOKEN_FILE", "data/google_token.json"), project_root),
+        briefing_time=_clock_time(values.get("JARVIS_BRIEFING_TIME", ""), env_path),
         llm_api_key=_require(values, _PROVIDER_SECRET[provider], env_path),
         search_api_key=search_api_key,
     )

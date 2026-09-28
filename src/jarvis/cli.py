@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 from dataclasses import dataclass
+from typing import Any
 import queue
 import sys
 import threading
@@ -18,6 +19,7 @@ from jarvis.llm.factory import create_embedder, create_llm
 from jarvis.memory.store import MemoryStore
 from jarvis.memory.tools import memory_tools
 from jarvis.tools.files import FileIndex, file_tools
+from jarvis.tools.briefing import Briefer, Briefing, DailyJob, JobState, briefing_tool
 from jarvis.tools.registry import ToolRegistry
 from jarvis.tools.search.base import SearchAdapter, SearchError
 from jarvis.tools.search.factory import create_search
@@ -50,10 +52,12 @@ class Services:
     search: SearchAdapter | None
     sources: Sources  # web sources of the latest answer, shown on screen
     memory: MemoryStore  # facts the user asked Jarvis to remember
+    briefer: Briefer  # morning briefing (Gmail + today's reminders)
 
     def build_tools(self) -> ToolRegistry:
         """All tools Jarvis may use. Each declares its permission tier."""
-        tools = [*reminder_tools(self.store), *memory_tools(self.memory), *(file_tools(self.files) if self.files else [])]
+        tools = [*reminder_tools(self.store), *memory_tools(self.memory), briefing_tool(self.briefer),
+                 *(file_tools(self.files) if self.files else [])]
         if self.search is not None:
             tools.append(web_search_tool(self.search, self.sources))
         return ToolRegistry(tools)
@@ -87,11 +91,37 @@ def start_file_index(config: Config) -> FileIndex | None:
     return index
 
 
+def gmail_client(config: Config) -> Any:
+    """The Gmail reader, or None until the Google client file is in place (see env.example)."""
+    if not config.gmail_client_file.is_file():
+        return None
+    from jarvis.integrations.gmail import GmailClient  # loads Google's libraries only when set up
+
+    return GmailClient(config.gmail_client_file, config.gmail_token_file)
+
+
+def gmail_login(config: Config) -> int:
+    from jarvis.integrations.gmail import GmailClient, GmailError
+
+    print("Opening your browser for Google sign-in (read-only Gmail access)...")
+    try:
+        GmailClient(config.gmail_client_file, config.gmail_token_file).login()
+    except GmailError as e:
+        print(f"Gmail sign-in failed: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:  # e.g. the browser window was closed
+        logger.error("Gmail sign-in failed: %s", type(e).__name__)
+        print(f"Gmail sign-in did not complete ({type(e).__name__}).", file=sys.stderr)
+        return 1
+    print(f"Signed in. Token saved to {config.gmail_token_file} (keep it private; it is gitignored).")
+    return 0
+
+
 class ReminderAlerts:
     """Announces due reminders: desktop notification, plus the terminal (text mode) or voice (voice mode)."""
 
     def __init__(self) -> None:
-        self.voice_queue: queue.Queue[str] | None = None  # set when voice mode starts
+        self.voice_queue: queue.Queue[Any] | None = None  # set when voice mode starts
         # WindowsNotifier loads its native libraries on the first notification, after the speech
         # model (loading them earlier crashes faster-whisper; see integrations/notify.py).
         from jarvis.integrations.notify import WindowsNotifier
@@ -108,10 +138,20 @@ class ReminderAlerts:
         else:
             print(f"\n[reminder] {message}\nyou> ", end="", flush=True)
 
+    def briefing(self, briefing: Briefing) -> None:
+        self._notifier.notify("Jarvis briefing", "Your morning briefing is ready.")
+        if self.voice_queue is not None:
+            from jarvis.voice.loop import BriefingAlert
+
+            self.voice_queue.put(BriefingAlert(briefing.spoken, briefing.screen))
+        else:
+            print(f"\n[briefing]\n{briefing.screen}\njarvis> {briefing.spoken}\nyou> ", end="", flush=True)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="jarvis", description="Jarvis personal assistant.")
     parser.add_argument("--voice", action="store_true", help="push-to-talk voice mode (falls back to text)")
+    parser.add_argument("--gmail-login", action="store_true", help="sign in to Gmail (read-only) and exit")
     args = parser.parse_args()
 
     try:
@@ -122,6 +162,8 @@ def main() -> int:
 
     setup_logging(config.logs_dir, secrets=config.secrets)
     logger.info("Jarvis starting: %s", config)
+    if args.gmail_login:
+        return gmail_login(config)
 
     try:
         llm = create_llm(config)
@@ -129,10 +171,18 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    services = Services(ReminderStore(config.data_dir / "jarvis.db"), start_file_index(config), start_search(config),
-                        Sources(), MemoryStore(config.data_dir / "memory.db", create_embedder(config)))
+    store = ReminderStore(config.data_dir / "jarvis.db")
+    gmail = gmail_client(config)
+    services = Services(store, start_file_index(config), start_search(config), Sources(),
+                        MemoryStore(config.data_dir / "memory.db", create_embedder(config)),
+                        Briefer(gmail, store, llm))
     alerts = ReminderAlerts()
-    scheduler = ReminderScheduler(services.store, alerts)
+    jobs = []
+    # Scheduled only once Gmail is set up (otherwise it would just say so every morning); on demand always works.
+    if config.briefing_time is not None and gmail is not None:
+        jobs.append(DailyJob("morning_briefing", config.briefing_time,
+                             lambda: alerts.briefing(services.briefer.compose()), JobState(config.data_dir / "jarvis.db")))
+    scheduler = ReminderScheduler(services.store, alerts, daily_jobs=jobs)
     try:
         if not (args.voice and run_voice(config, llm, services, alerts, scheduler)):
             scheduler.start()
@@ -168,6 +218,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
             print(f"Loading speech model {voice.stt_model}...")
         stt = create_stt(voice, api_key=config.llm_api_key)
         speaker = create_speaker(voice, purpose="reply")
+        briefing_speaker = create_speaker(voice, purpose="briefing")  # ElevenLabs where JARVIS_ELEVENLABS_USE_FOR allows
         hotkey = HotkeyListener(voice.ptt_key)
     except (ConfigError, STTError, TTSError, AudioError, ValueError) as e:
         print(f"Voice mode unavailable: {e}\nFalling back to text chat.\n")
@@ -179,7 +230,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), hotkey.events,
                      hotkey.drain, voice.max_record_seconds, alerts=alerts.voice_queue,
-                     sources=services.sources)
+                     sources=services.sources, briefing_speaker=briefing_speaker)
     hotkey.start()
     scheduler.start()
     print(f"Jarvis voice mode ({config.llm_model}, {voice.stt_model}). "

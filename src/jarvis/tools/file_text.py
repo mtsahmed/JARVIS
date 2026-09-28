@@ -88,7 +88,7 @@ def _epub_text(path: Path) -> str | None:
         parts: list[str] = []
         length = 0
         for name in chapters:
-            text = _html_to_text(book.read(name).decode("utf-8", errors="replace"))
+            text = html_to_text(book.read(name).decode("utf-8", errors="replace"))
             parts.append(text)
             length += len(text)
             if length >= MAX_CHARS:
@@ -154,7 +154,8 @@ class _TextOnly(HTMLParser):
             self.parts.append(data)
 
 
-def _html_to_text(html: str) -> str:
+def html_to_text(html: str) -> str:
+    """Visible text of an HTML document (scripts, styles and head skipped)."""
     parser = _TextOnly()
     parser.feed(html)
     lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())

@@ -21,7 +21,8 @@ DEFAULT_INSTRUCTIONS = (
     "Keep replies short, clear, and easy to read aloud. "
     "For facts that change over time (prices, news, weather), use the web_search tool when it is available. "
     "When an action needs the user's approval, just call the tool: Jarvis asks the user itself, "
-    "so never ask for confirmation in your reply."
+    "so never ask for confirmation in your reply. "
+    "Only offer to do things you have tools for."
 )
 
 

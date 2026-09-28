@@ -39,7 +39,8 @@ VOICE_INSTRUCTIONS = (
     "screen. If web search is not available or fails, say you cannot look it up live right now, then give the "
     "most recent information you know and roughly when it is from. "
     "When an action needs the user's approval, just call the tool: Jarvis asks the user itself, "
-    "so never ask for confirmation in your reply."
+    "so never ask for confirmation in your reply. "
+    "Only offer to do things you have tools for."
 )
 
 # Saying one of these (and nothing else) starts a new conversation, like /reset in text mode.
@@ -60,7 +61,9 @@ _NO_WORDS = frozenset({"no", "not", "don't", "dont", "cancel", "stop", "wait", "
 
 
 SEARCH_ACK = "Let me check."
-_ACK_TOOLS = frozenset({"web_search"})  # slow tools: say something so the user isn't left in silence
+BRIEFING_ACK = "Let me check your inbox."
+# Slow tools: say something at once so the user isn't left in silence.
+_ACK_PHRASES = {"web_search": SEARCH_ACK, "morning_briefing": BRIEFING_ACK}
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,17 @@ class Ack:
     """A short filler phrase (e.g. while searching). Spoken, but not counted as the answer in metrics."""
 
     text: str
+    # The answer that follows is a briefing: speak it in one piece with the briefing (premium) voice,
+    # since sentence-by-sentence premium requests (~3-4 s each) would leave long gaps.
+    briefing: bool = False
+
+
+@dataclass(frozen=True)
+class BriefingAlert:
+    """A composed morning briefing, queued like a reminder alert and spoken while Jarvis is idle."""
+
+    spoken: str
+    screen: str
 
 
 @dataclass
@@ -112,9 +126,11 @@ class VoiceLoop:
         drain: Callable[[], None],
         max_record_seconds: float,
         usage_sink: Callable[[dict[str, Any]], None] = log_usage,
-        alerts: queue.Queue[str] | None = None,
+        alerts: queue.Queue[str | BriefingAlert] | None = None,
         sources: Sources | None = None,
+        briefing_speaker: SpeakerLike | None = None,
     ) -> None:
+        self._briefing_speaker = briefing_speaker or speaker  # premium voice where config allows
         self._sources = sources  # web search sources: shown on screen after the answer, never spoken
         self._alerts = alerts  # e.g. due reminders; spoken only while Jarvis is idle
         self._session = session
@@ -150,11 +166,15 @@ class VoiceLoop:
         """Say any queued alerts, between turns only, so they never interrupt a reply."""
         while self._alerts is not None:
             try:
-                text = self._alerts.get_nowait()
+                alert = self._alerts.get_nowait()
             except queue.Empty:
                 return
-            print(f"\n[reminder] {text}")
-            self._say(text)
+            if isinstance(alert, BriefingAlert):
+                print(f"\n[briefing]\n{alert.screen}\njarvis> {alert.spoken}")
+                self._say(alert.spoken, self._briefing_speaker)
+                continue
+            print(f"\n[reminder] {alert}")
+            self._say(alert)
 
     def _next_event(self, timeout: float | None = None) -> str | None:
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -214,10 +234,17 @@ class VoiceLoop:
 
         until_speak_ms: int | None = None
         spoken = 0
+        held: list[str] | None = None  # a briefing answer, collected to be spoken in one piece
         while (raw := self._next_sentence(sentences)) is not None:
             if isinstance(raw, Ack):
                 print(f"jarvis> {raw.text}")
                 self._say(raw.text)
+                if raw.briefing and held is None:
+                    held = []
+                continue
+            if held is not None and isinstance(raw, str):
+                if sentence := speakable(raw):
+                    held.append(sentence)
                 continue
             if isinstance(raw, ConfirmRequest):
                 if spoken:
@@ -238,6 +265,11 @@ class VoiceLoop:
         if spoken:
             print()
         worker.join()
+        if held:
+            until_speak_ms = until_speak_ms or _ms_since(ended_at)
+            print(f"jarvis> {' '.join(held)}")
+            self._say(" ".join(held), self._briefing_speaker)
+            spoken += len(held)
         if self._sources is not None and (found := self._sources.take()):
             print(format_sources(found))
 
@@ -290,9 +322,9 @@ class VoiceLoop:
 
         def on_tool_start(name: str) -> None:
             nonlocal acked
-            if name in _ACK_TOOLS and not acked:  # once per question, even if the model searches twice
+            if name in _ACK_PHRASES and not acked:  # once per question, even if the model searches twice
                 acked = True
-                sentences.put(Ack(SEARCH_ACK))
+                sentences.put(Ack(_ACK_PHRASES[name], briefing=name == "morning_briefing"))
 
         try:
             self._session.ask(text, on_text=lambda piece: [sentences.put(s) for s in splitter.feed(piece)],
@@ -313,9 +345,9 @@ class VoiceLoop:
             except queue.Empty:
                 continue
 
-    def _say(self, text: str) -> None:
+    def _say(self, text: str, speaker: SpeakerLike | None = None) -> None:
         try:
-            self._speaker.speak(text)
+            (speaker or self._speaker).speak(text)
         except TTSError as e:
             print(f"[voice error] {e}")
 
