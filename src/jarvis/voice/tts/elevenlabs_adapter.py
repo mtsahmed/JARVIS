@@ -63,13 +63,18 @@ class ElevenLabsAdapter:
             logger.warning("ElevenLabs connection problem: %s", type(e).__name__)
             raise TTSError("Could not reach ElevenLabs. Check your internet connection.") from None
 
-    def characters_left(self) -> int:
-        """Characters remaining in the current billing period. Raises TTSError."""
+    def quota(self) -> tuple[int, int]:
+        """(characters used, character limit) in the current billing period. Raises TTSError."""
         try:
             data = json.loads(self._request("GET", "/user/subscription"))
-            return int(data["character_limit"]) - int(data["character_count"])
+            return int(data["character_count"]), int(data["character_limit"])
         except (ValueError, KeyError, TypeError):
             raise TTSError("Unexpected quota response from ElevenLabs.") from None
+
+    def characters_left(self) -> int:
+        """Characters remaining in the current billing period. Raises TTSError."""
+        used, limit = self.quota()
+        return limit - used
 
     def speak(self, text: str) -> None:
         path = f"/text-to-speech/{urllib.parse.quote(self._voice_id, safe='')}?output_format={OUTPUT_FORMAT}"

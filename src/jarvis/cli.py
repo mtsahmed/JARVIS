@@ -16,7 +16,8 @@ from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
 from jarvis.core.instance import InstanceLock
-from jarvis.core import backup, health
+from jarvis.core import backup, health, usage_report
+from jarvis.core.usage_report import CostMeter, Prices
 from jarvis.core.health import FailureWatcher, start_background_check
 from jarvis.core.logging_setup import add_usage_observer, setup_logging
 from jarvis.core.scheduler import ReminderScheduler
@@ -182,6 +183,7 @@ def main() -> int:
                         help="start Jarvis (voice, minimized) when you sign in to Windows, and exit")
     parser.add_argument("--health", action="store_true", help="check every part of Jarvis (free) and exit")
     parser.add_argument("--backup", action="store_true", help="back up memories and reminders now, and exit")
+    parser.add_argument("--usage", action="store_true", help="show this month's usage and budget, and exit")
     parser.add_argument("--restore", nargs="?", const="list", metavar="YYYY-MM-DD",
                         help="list backups, or restore the one from that date (Jarvis must be stopped), and exit")
     args = parser.parse_args()
@@ -206,6 +208,8 @@ def main() -> int:
         return health_command(config)
     if args.backup:
         return backup_command(config)
+    if args.usage:
+        return usage_command(config)
     if args.restore:
         return restore_command(config, args.restore)
 
@@ -235,6 +239,44 @@ def autostart_command(action: str, config: Config) -> int:
         print("Auto-start is off." if autostart.disable() else "Auto-start was not on.")
     else:
         print(f"Auto-start: {autostart.status(config.project_root)}")
+    return 0
+
+
+HARD_CAP_NOTE = "Hard cap: the spending limit set in your OpenAI dashboard (owner: $20)."
+
+
+def cost_meter(config: Config, alert: Callable[[str], None]) -> CostMeter:
+    logs = [config.logs_dir / "usage.jsonl", *(config.logs_dir / f"usage.jsonl.{i}" for i in (1, 2, 3))]
+    return CostMeter(config.data_dir / "jarvis.db", Prices.load(config.prices_file), config.monthly_budget_usd,
+                     config.budget_warn_percent, alert, usage_logs=logs)
+
+
+def allowance_checks(config: Config, search: Any) -> list[tuple[str, Any]]:
+    """Free allowances with their own usage APIs: Tavily credits, ElevenLabs characters (free calls)."""
+    checks: list[tuple[str, Any]] = []
+    if search is not None and hasattr(search, "usage"):
+        checks.append(("Web search credits (Tavily)", search.usage))
+    try:
+        from jarvis.core.config import load_voice_config
+
+        voice = load_voice_config()
+        if voice.elevenlabs_use_for and voice.elevenlabs_api_key:
+            from jarvis.voice.tts.elevenlabs_adapter import ElevenLabsAdapter
+
+            adapter = ElevenLabsAdapter(voice.elevenlabs_api_key, voice.elevenlabs_voice_id or "", voice.elevenlabs_model or "")
+            checks.append(("Premium voice characters (ElevenLabs)", adapter.quota))
+    except ConfigError:
+        pass
+    return checks
+
+
+def usage_command(config: Config) -> int:
+    meter = cost_meter(config, alert=lambda message: None)  # the report itself shows the numbers
+    try:
+        print(usage_report.report(meter, config.monthly_budget_usd, allowance_checks(config, start_search(config)),
+                                  HARD_CAP_NOTE))
+    finally:
+        meter.close()
     return 0
 
 
@@ -342,9 +384,19 @@ def run_jarvis(config: Config, voice: bool) -> int:
                         Briefer(gmail, store, llm))
     alerts = ReminderAlerts()
     add_usage_observer(FailureWatcher(alerts.problem).observe)  # 3 failures in a row of one service -> alert
-    # Daily backup of memories and reminders: at the first check each day (time 00:00 = "as soon as possible").
+    meter = cost_meter(config, alerts.problem)  # estimated monthly OpenAI spend -> budget alerts (80%, 100%)
+    add_usage_observer(meter.observe)
+
+    def daily_money_check() -> None:
+        meter.check_budget()  # repeats the budget warning once a day while over the warning level
+        for warning in usage_report.allowance_warnings(allowance_checks(config, services.search),
+                                                       config.budget_warn_percent):
+            alerts.problem(warning)
+
+    # Daily jobs run at the first check each day (time 00:00 = "as soon as possible").
     jobs = [DailyJob("backup", time(0, 0), lambda: backup.backup_now(config.data_dir, local_now().date()),
-                     JobState(config.data_dir / "jarvis.db"))]
+                     JobState(config.data_dir / "jarvis.db")),
+            DailyJob("money_check", time(0, 0), daily_money_check, JobState(config.data_dir / "jarvis.db"))]
     # Scheduled only once Gmail is set up (otherwise it would just say so every morning); on demand always works.
     if config.briefing_time is not None and gmail is not None:
         jobs.append(DailyJob("morning_briefing", config.briefing_time,
@@ -364,6 +416,7 @@ def run_jarvis(config: Config, voice: bool) -> int:
     finally:
         scheduler.stop()
         services.close()  # release the database files (Windows keeps open files locked)
+        meter.close()
     logger.info("Jarvis stopped")
     return 0
 
