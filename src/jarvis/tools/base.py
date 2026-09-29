@@ -19,8 +19,9 @@ class ToolError(Exception):
 
 
 class Confirmer(Protocol):
-    def confirm(self, question: str) -> bool:
-        """Ask the user; True only for an explicit yes. Silence or anything unclear is False."""
+    def confirm(self, question: str, action: str = "") -> bool:
+        """Ask the user; True only for an explicit yes. Silence or anything unclear is False.
+        `action` is the tool's name (shown on the HUD's approval dialog and written to the audit log)."""
         ...
 
 

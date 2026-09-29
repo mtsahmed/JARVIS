@@ -15,6 +15,7 @@ import threading
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
 from jarvis.core.config import PROJECT_ROOT, Config, ConfigError, load_config
+from jarvis.core.approvals import TEXT_TIMEOUT_SECONDS, Approvals
 from jarvis.core.events import EventBus
 from jarvis.core.inbox import END, Inbox, Typed
 from jarvis.core.instance import InstanceLock
@@ -79,10 +80,10 @@ class TerminalReader:
                 return
 
 
-def next_typed(inbox: Inbox) -> Typed | None:
-    """The next typed request (terminal or HUD), or None at the end of input. Talk-key events are
-    ignored: text mode has no microphone."""
-    while True:
+def next_typed(inbox: Inbox, give_up: Callable[[], bool] = lambda: False) -> Typed | None:
+    """The next typed request (terminal or HUD), or None at the end of input or once `give_up()` is
+    true. Talk-key events are ignored: text mode has no microphone."""
+    while not give_up():
         try:
             item = inbox.queue.get(timeout=0.2)  # timeout keeps Ctrl+C responsive on Windows
         except queue.Empty:
@@ -92,25 +93,38 @@ def next_typed(inbox: Inbox) -> Typed | None:
             return None
         if isinstance(item, Typed):
             return item
+    return None
 
 
 class TextConfirmer:
-    """Asks before a CONFIRM-tier action; the answer is typed in the terminal or the HUD.
-    Only y/yes approves; anything else, or the end of input, is no."""
+    """Asks before a CONFIRM-tier action. The first answer wins: typed in the terminal or on the HUD, or
+    clicked on the HUD's dialog. Only y/yes approves; anything else, the end of input, or no answer
+    within TEXT_TIMEOUT_SECONDS is no."""
 
-    def __init__(self, inbox: Inbox, reader: TerminalReader) -> None:
+    def __init__(self, inbox: Inbox, reader: TerminalReader, approvals: Approvals | None = None,
+                 bus: EventBus | None = None) -> None:
         self._inbox, self._reader = inbox, reader
+        self._bus = bus or EventBus()
+        self._approvals = approvals or Approvals(self._bus)
 
-    def confirm(self, question: str) -> bool:
+    def confirm(self, question: str, action: str = "") -> bool:
+        approval = self._approvals.open(question, action, timeout=TEXT_TIMEOUT_SECONDS)
+        self._bus.state("confirm", question)
         print(f"jarvis> {for_terminal(question)} [y/N]")
         self._reader.request("  your answer> ")
-        answer = next_typed(self._inbox)
-        if answer is None:
-            print()
-            return False
-        if answer.source == "hud":
-            print(f"  (answered on the HUD) {for_terminal(answer.text)}")
-        return answer.text.strip().lower() in ("y", "yes")
+        answer = next_typed(self._inbox, give_up=lambda: approval.decided or not approval.seconds_left())
+        if answer is not None:
+            if answer.source == "hud":
+                print(f"  (typed on the HUD) {for_terminal(answer.text)}")
+            by = "screen" if answer.source == "hud" else "terminal"
+            self._approvals.answer(approval.request_id, answer.text.strip().lower() in ("y", "yes"), by)
+        self._approvals.expire(approval)  # no answer (or end of input): no; a no-op if it was answered
+        if approval.by == "screen" and answer is None:
+            print(f"  ({'approved' if approval.approved else 'declined'} on the HUD)")
+        elif approval.by == "timeout":
+            print(f"  (no answer in {TEXT_TIMEOUT_SECONDS:.0f} s: not done)")
+        self._bus.state("thinking")
+        return approval.approved
 
 
 @dataclass
@@ -470,15 +484,16 @@ def run_jarvis(config: Config, voice: bool) -> int:
 
     bus = EventBus()  # what Jarvis is doing, for displays such as the HUD
     inbox = Inbox()  # talk-key events and typed requests (terminal; the HUD from UI-3C)
+    approvals = Approvals(bus)  # CONFIRM-tier approvals: by voice, typing, or the HUD
     hud = start_hud(config, bus)
     try:
         if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus,
-                                    inbox=inbox)):
+                                    inbox=inbox, approvals=approvals)):
             scheduler.start()
             check_health()
             session = ChatSession(llm, history_turns=config.history_turns, tools=services.build_tools(),
                                   memory=services.memory)
-            run_text(config, session, services.sources, bus, inbox)
+            run_text(config, session, services.sources, bus, inbox, approvals)
     finally:
         scheduler.stop()
         services.close()  # release the database files (Windows keeps open files locked)
@@ -508,7 +523,8 @@ def start_hud(config: Config, bus: EventBus) -> Any:
 
 def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: ReminderAlerts,
               scheduler: ReminderScheduler, on_started: Callable[[], None] = lambda: None,
-              bus: EventBus | None = None, inbox: Inbox | None = None) -> bool:
+              bus: EventBus | None = None, inbox: Inbox | None = None,
+              approvals: Approvals | None = None) -> bool:
     """Run voice mode until Ctrl+C. Returns False if voice could not start (caller falls back to text)."""
     # Imported here so text mode never loads the audio/speech libraries.
     from jarvis.core.config import load_voice_config
@@ -543,7 +559,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     alerts.voice_queue = queue.Queue()
     loop = VoiceLoop(session, stt, speaker, Recorder(voice.max_record_seconds), inbox.queue,
                      voice.max_record_seconds, alerts=alerts.voice_queue,
-                     sources=services.sources, briefing_speaker=briefing_speaker, bus=bus)
+                     sources=services.sources, briefing_speaker=briefing_speaker, bus=bus, approvals=approvals)
     hotkey.start()
     scheduler.start()
     on_started()
@@ -559,12 +575,12 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
 
 
 def run_text(config: Config, session: ChatSession, sources: Sources, bus: EventBus | None = None,
-             inbox: Inbox | None = None) -> None:
+             inbox: Inbox | None = None, approvals: Approvals | None = None) -> None:
     """Text chat. Requests come from the terminal or the HUD's text box (the Inbox). Commands like
     /exit work only from the terminal: the HUD cannot stop Jarvis."""
     bus, inbox = bus or EventBus(), inbox or Inbox()
     reader = TerminalReader(inbox)
-    confirmer = TextConfirmer(inbox, reader)
+    confirmer = TextConfirmer(inbox, reader, approvals or Approvals(bus), bus)
     print(f"Jarvis ({config.llm_model}). {HELP}")
     bus.state("idle")
     try:

@@ -24,7 +24,7 @@ DECLINED = "Cancelled: the user just answered no, so nothing was changed. Say br
 class DenyAll:
     """Default confirmer: nothing needing approval ever runs."""
 
-    def confirm(self, question: str) -> bool:
+    def confirm(self, question: str, action: str = "") -> bool:
         return False
 
 
@@ -81,7 +81,7 @@ class ToolRegistry:
             if remembered is not None and remembered in self._approved:
                 decision = "remembered"  # the user already said yes to this in this chat session
             else:
-                approved = (confirmer or DenyAll()).confirm(tool.describe(args))
+                approved = (confirmer or DenyAll()).confirm(tool.describe(args), action=tool.name)
                 decision = "approved" if approved else "denied"
                 if not approved:  # a "no" is not remembered: the next request asks again
                     return self._finish(entry, started, decision, "denied", DECLINED)
@@ -91,7 +91,7 @@ class ToolRegistry:
             # Text from a file, web page or email is in play: it could be steering this action (e.g. to
             # leak private facts in a search query), so the user decides. Never remembered.
             entry["guard"] = "after untrusted content"
-            approved = (confirmer or DenyAll()).confirm(tool.confirm_after_untrusted(args))
+            approved = (confirmer or DenyAll()).confirm(tool.confirm_after_untrusted(args), action=tool.name)
             decision = "approved" if approved else "denied"
             if not approved:
                 return self._finish(entry, started, decision, "denied", DECLINED)

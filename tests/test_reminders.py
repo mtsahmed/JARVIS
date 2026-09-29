@@ -26,7 +26,7 @@ class Answer:
     def __init__(self, yes: bool) -> None:
         self.yes, self.asked = yes, []
 
-    def confirm(self, question: str) -> bool:
+    def confirm(self, question: str, action: str = "") -> bool:
         self.asked.append(question)
         return self.yes
 

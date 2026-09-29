@@ -153,7 +153,8 @@ def test_confirmation_publishes_confirm_mode_with_the_question() -> None:
     loop._bus = bus
     loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
     confirm = [e.data for e in rec.events if e.type == "state" and e.data["mode"] == "confirm"]
-    assert opened == ["budget.xlsx"] and confirm == [{"mode": "confirm", "detail": "Open budget.xlsx?"}]
+    # confirm (the dialog opens) -> speaking (the question is read out) -> confirm (waiting for the answer)
+    assert opened == ["budget.xlsx"] and confirm == [{"mode": "confirm", "detail": "Open budget.xlsx?"}] * 2
     assert rec.modes().index("confirm") < rec.modes().index("listening")  # then the spoken answer
     assert [t["text"] for t in rec.of("transcript")] == ["open my budget", "Yes."]
     assert rec.modes()[-1] == "idle"

@@ -9,6 +9,9 @@ Event types and their data (same shapes as docs/ui-protocol.md):
 - "transcript": {"text": str, "final": bool}             what the user said (or typed in the terminal)
 - "reply":      {"text": str, "sources": [{"title", "url"}], "kind": "answer" | "reminder" | "briefing"}
 - "error":      {"code": str, "message": str, "recoverable": bool}   user-friendly text only
+- "confirm_request": {"request_id", "action", "target", "summary", "tier", "expires_in_s"}
+- "confirm_result":  {"request_id", "outcome": "approved" | "denied" | "expired", "by": "voice" | "screen" |
+                      "terminal" | "timeout"}
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 STATE, TRANSCRIPT, REPLY, ERROR = "state", "transcript", "reply", "error"
+CONFIRM_REQUEST, CONFIRM_RESULT = "confirm_request", "confirm_result"  # from jarvis.core.approvals (UI-3B)
 MODES = frozenset({"idle", "listening", "thinking", "speaking", "confirm", "error"})
 
 
@@ -76,3 +80,10 @@ class EventBus:
 
     def error(self, code: str, message: str, recoverable: bool = True) -> None:
         self.publish(ERROR, code=code, message=message, recoverable=recoverable)
+
+    def confirm_request(self, request_id: str, action: str, summary: str, tier: str, expires_in_s: float) -> None:
+        self.publish(CONFIRM_REQUEST, request_id=request_id, action=action, target="", summary=summary, tier=tier,
+                     expires_in_s=expires_in_s)
+
+    def confirm_result(self, request_id: str, outcome: str, by: str) -> None:
+        self.publish(CONFIRM_RESULT, request_id=request_id, outcome=outcome, by=by)

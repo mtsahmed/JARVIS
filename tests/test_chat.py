@@ -138,7 +138,7 @@ def test_tools_and_confirmer_reach_the_registry() -> None:
             return LLMReply(text=result, model="fake", usage=None, tool_calls=1)
 
     class Yes:
-        def confirm(self, question: str) -> bool:
+        def confirm(self, question: str, action: str = "") -> bool:
             return True
 
     records: list[dict[str, Any]] = []

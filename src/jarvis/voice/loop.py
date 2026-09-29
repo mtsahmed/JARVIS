@@ -17,6 +17,7 @@ import psutil
 
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
+from jarvis.core.approvals import VOICE_TIMEOUT_SECONDS, Approvals
 from jarvis.core.events import EventBus
 from jarvis.core.inbox import Item, Typed
 from jarvis.core.logging_setup import log_usage
@@ -57,8 +58,9 @@ _FILLER_WORDS = frozenset({"okay", "ok", "all", "right", "alright", "yeah", "yes
 _MIN_FILLER_RUN = 4
 _POLL_SECONDS = 0.2  # queue waits time out regularly so Ctrl+C works on Windows
 
-# Spoken approval for CONFIRM-tier actions. Anything else, including silence, means no.
-CONFIRM_WAIT_SECONDS = 10.0
+# Approval for CONFIRM-tier actions: an explicit yes (spoken, typed, or clicked on the HUD) within this
+# time. Anything else, including silence, means no.
+CONFIRM_WAIT_SECONDS = VOICE_TIMEOUT_SECONDS
 _YES_WORDS = frozenset({"yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "correct", "affirmative"})
 _YES_PHRASES = ("go ahead", "do it")
 _NO_WORDS = frozenset({"no", "not", "don't", "dont", "cancel", "stop", "wait", "never", "nope"})
@@ -93,6 +95,7 @@ class ConfirmRequest:
     """Sent from the LLM worker thread to the main thread, which asks the user by voice."""
 
     question: str
+    action: str = ""  # the tool's name
     done: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
 
@@ -103,8 +106,8 @@ class _QueueConfirmer:
     def __init__(self, items: queue.Queue[Any]) -> None:
         self._items = items
 
-    def confirm(self, question: str) -> bool:
-        request = ConfirmRequest(question)
+    def confirm(self, question: str, action: str = "") -> bool:
+        request = ConfirmRequest(question, action)
         self._items.put(request)
         request.done.wait()
         return request.approved
@@ -133,8 +136,10 @@ class VoiceLoop:
         sources: Sources | None = None,
         briefing_speaker: SpeakerLike | None = None,
         bus: EventBus | None = None,
+        approvals: Approvals | None = None,
     ) -> None:
         self._bus = bus or EventBus()  # what Jarvis is doing, for displays such as the HUD
+        self._approvals = approvals or Approvals(self._bus)  # answerable by voice, typing, or the HUD
         self._mode: tuple[str, str] = ("", "")  # last published (mode, detail)
         self._briefing_speaker = briefing_speaker or speaker  # premium voice where config allows
         self._sources = sources  # web search sources: shown on screen after the answer, never spoken
@@ -325,7 +330,7 @@ class VoiceLoop:
                 if spoken:
                     print()
                 try:
-                    raw.approved = self._confirm_by_voice(raw.question)
+                    raw.approved = self._confirm(raw.question, raw.action)
                 finally:
                     raw.done.set()  # never leave the worker waiting
                 self._set_mode("thinking")
@@ -379,37 +384,49 @@ class VoiceLoop:
             "rss_mb": round(psutil.Process().memory_info().rss / 1_048_576),
         })
 
-    def _confirm_by_voice(self, question: str) -> bool:
-        """Main thread: read the action back, then wait for an explicit yes, spoken or typed."""
+    def _confirm(self, question: str, action: str = "") -> bool:
+        """Main thread: ask aloud (the HUD shows the same request) and take the first answer: spoken,
+        typed, or clicked on the HUD. No answer in time means no."""
+        approval = self._approvals.open(question, action, timeout=CONFIRM_WAIT_SECONDS)
         print(f"jarvis> {for_terminal(question)} (hold the key and say yes to confirm)")
+        self._set_mode("confirm", question)
         self._say(f"{question} Say yes to confirm.")
         self._set_mode("confirm", question)
         # Typed requests queued before the question are not answers to it: set them aside.
         earlier, self._pending = self._pending, deque()
         try:
             self._drain_keys()  # ignore key presses made while the question was being read out
-            answer = ""
-            event = self._next_event(timeout=CONFIRM_WAIT_SECONDS)
-            if isinstance(event, Typed):
-                answer = event.text
-                print(f"you typed> {for_terminal(answer)}")
-            elif event == "start" and (samples := self._record()) is not None:
-                self._set_mode("thinking")
-                try:
-                    answer = self._stt.transcribe(samples).text
-                except STTError as e:
-                    print(f"[error] {e}")
-                    self._error("speech_recognition", str(e))
-                print(f"you said> {for_terminal(answer) or '(nothing)'}")
-            else:
-                print("(no answer)")
-            if answer:
-                self._bus.transcript(answer)
-            approved = is_yes(answer)
+            while not approval.decided and (left := approval.seconds_left()) > 0:
+                event = self._next_event(timeout=min(left, _POLL_SECONDS))
+                if isinstance(event, Typed):
+                    answer, by = event.text, "screen" if event.source == "hud" else "terminal"
+                    print(f"you typed> {for_terminal(answer)}")
+                elif event == "start":
+                    samples = self._record()
+                    if samples is None or approval.decided:  # e.g. answered on the HUD meanwhile
+                        continue
+                    self._set_mode("thinking")
+                    answer, by = "", "voice"
+                    try:
+                        answer = self._stt.transcribe(samples).text
+                    except STTError as e:
+                        print(f"[error] {e}")
+                        self._error("speech_recognition", str(e))
+                    print(f"you said> {for_terminal(answer) or '(nothing)'}")
+                else:
+                    continue
+                if answer:
+                    self._bus.transcript(answer)
+                self._approvals.answer(approval.request_id, is_yes(answer), by)
+            self._approvals.expire(approval)  # no-op if it was answered
         finally:
             self._pending.extendleft(reversed(earlier))
-        self._say("Okay." if approved else "Okay, I won't.")
-        return approved
+        if approval.by == "timeout":
+            print("(no answer)")
+        elif approval.by == "screen":
+            print(f"({'approved' if approval.approved else 'declined'} on the HUD)")
+        self._say("Okay." if approval.approved else "Okay, I won't.")
+        return approval.approved
 
     def _stream_reply(self, text: str, sentences: queue.Queue[str | Ack | ConfirmRequest | None], outcome: dict[str, Any]) -> None:
         """Worker thread: stream the LLM reply and queue complete sentences. Always ends with None."""
