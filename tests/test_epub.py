@@ -77,7 +77,7 @@ def test_epub_searchable_and_readable_with_yes(tmp_path: Path) -> None:
     assert [h.name for h in index.search("tomatoes sun")] == ["garden-guide.epub"]
 
     class Yes:
-        def confirm(self, question: str) -> bool:
+        def confirm(self, question: str, action: str = "") -> bool:
             return True
 
     registry = ToolRegistry(file_tools(index), audit_sink=lambda r: None)

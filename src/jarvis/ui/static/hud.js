@@ -1,6 +1,7 @@
-// Jarvis HUD, UI-2 (one-way): shows what Jarvis is doing. Protocol: docs/ui-protocol.md.
-// Every server message is checked before use, and all text is inserted with textContent (never as HTML):
-// replies can contain text from web pages and emails.
+// Jarvis HUD, UI-3 (two-way): shows what Jarvis is doing and sends the user's input (mic button, typed
+// requests, approval clicks). Protocol: docs/ui-protocol.md. Every server message is checked before use,
+// and all text is inserted with textContent (never as HTML): replies can contain text from web pages and
+// emails. The page decides nothing: the server is the source of truth.
 "use strict";
 
 (() => {
@@ -10,17 +11,20 @@
   const MAX_BACKOFF_MS = 30000;
   const LOG_LIMIT = 50;
   const ALERT_MS = 8000;
+  const MAX_TEXT = 2000;
+  const COUNT_FROM = 1800; // show the character count near the limit
 
   const MODES = {
-    idle: { pill: "IDLE", title: "STANDING BY", hint: "Hold the talk key and speak." },
-    listening: { pill: "LISTENING", title: "LISTENING", hint: "Speak now. Release the key when you are done." },
+    idle: { pill: "IDLE", title: "STANDING BY", hint: "Hold the talk key, tap the mic, or type below." },
+    listening: { pill: "LISTENING", title: "LISTENING", hint: "Speak now. Tap the mic again (or release the key) when you are done." },
     thinking: { pill: "THINKING", title: "THINKING", hint: "Working on it…" },
     speaking: { pill: "SPEAKING", title: "SPEAKING", hint: "" },
-    confirm: { pill: "APPROVAL", title: "AWAITING APPROVAL", hint: "Hold the talk key and say yes to approve." },
+    confirm: { pill: "APPROVAL", title: "AWAITING APPROVAL", hint: "Say yes, or use the buttons." },
     error: { pill: "ERROR", title: "ERROR", hint: "" },
     offline: { pill: "OFFLINE", title: "CONNECTING", hint: "Waiting for Jarvis. Is it running with the HUD turned on?" },
   };
-  const WHO = { user: "YOU", jarvis: "JARVIS", reminder: "REMINDER", briefing: "BRIEFING", notice: "NOTICE" };
+  const TEXT_MODE_IDLE_HINT = "Type below. (Jarvis is in text mode: no microphone.)";
+  const WHO = { user: "YOU", jarvis: "JARVIS", reminder: "REMINDER", briefing: "BRIEFING", notice: "NOTICE", approval: "APPROVAL" };
   const BAR_HEIGHTS = [14, 22, 30, 18, 36, 26, 40, 20, 32, 44, 24, 38, 16, 42, 28, 34,
                        44, 22, 36, 18, 40, 30, 26, 44, 20, 34, 24, 38, 16, 28, 22, 14];
 
@@ -29,15 +33,23 @@
     pill: $("pill-text"), title: $("state-title"), hint: $("state-hint"), version: $("version"),
     lastUser: $("last-user"), lastReply: $("last-reply"), sources: $("last-sources"), log: $("log"),
     conn: $("conn"), time: $("time"), date: $("date"), wave: $("wave"),
+    mic: $("mic"), text: $("text"), send: $("send"), count: $("count"),
+    confirm: $("confirm"), confirmAction: $("confirm-action"), confirmTarget: $("confirm-target"),
+    confirmTargetRow: $("confirm-target-row"), confirmSummary: $("confirm-summary"), confirmTier: $("confirm-tier"),
+    confirmLeft: $("confirm-left"), approve: $("approve"), deny: $("deny"),
   };
 
   let token = document.querySelector('meta[name="jarvis-session-token"]').content;
   let socket = null;
+  let connected = false; // hello_ack received on the current socket
   let backoff = 1000;
   let pingTimer = null;
   let lastPong = 0;
   let alertTimer = null;
   let detail = "";
+  let voice = false; // Jarvis runs in voice mode: the mic button works
+  let recording = false; // this page started a recording with its mic button
+  let pending = null; // the open approval: { id, deadline, timer, returnFocus }
 
   // --- small helpers ------------------------------------------------------------------------------
 
@@ -51,7 +63,9 @@
   function send(type, data) {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ v: VERSION, type, id: uuid(), ts: new Date().toISOString(), data: data || {} }));
+      return true;
     }
+    return false;
   }
 
   function safeHttpsUrl(value) {
@@ -72,13 +86,17 @@
     const m = MODES[mode];
     el.pill.textContent = m.pill;
     el.title.textContent = m.title;
+    if (mode !== "listening" && recording) setRecording(false); // the recording ended (released, cap, error)
     if (!alertTimer) showHint();
   }
 
   function showHint() {
-    const m = MODES[document.body.dataset.mode] || MODES.offline;
+    const mode = document.body.dataset.mode;
+    const m = MODES[mode] || MODES.offline;
+    let hint = mode === "idle" && !voice ? TEXT_MODE_IDLE_HINT : m.hint;
+    if (detail) hint = mode === "confirm" ? detail + " " + m.hint : detail;
     el.hint.classList.remove("alert");
-    el.hint.textContent = detail ? (document.body.dataset.mode === "confirm" ? detail + " " + m.hint : detail) : m.hint;
+    el.hint.textContent = hint;
   }
 
   function showAlert(text) {
@@ -109,7 +127,7 @@
     const empty = el.log.querySelector(".empty");
     if (empty) empty.remove();
     const li = document.createElement("li");
-    li.className = role === "user" ? "user" : role === "notice" ? "notice" : "jarvis";
+    li.className = role === "user" || role === "notice" || role === "approval" ? role : "jarvis";
     const who = document.createElement("span");
     who.className = "who";
     who.textContent = WHO[role] || "JARVIS";
@@ -138,33 +156,161 @@
     return kind === "reminder" || kind === "briefing" ? kind : "jarvis";
   }
 
+  function logRole(entry) {
+    if (entry.role === "user") return "user";
+    if (entry.role === "error") return "notice";
+    if (entry.role === "approval") return "approval";
+    return replyRole(entry.kind);
+  }
+
+  // --- input: mic button, text box ---------------------------------------------------------------
+
+  function updateControls() {
+    el.mic.disabled = !connected || !voice;
+    el.mic.setAttribute("aria-label", voice ? "Talk: tap to start, tap again to send"
+                                            : "Talk (unavailable: Jarvis is in text mode)");
+    el.text.disabled = !connected;
+    el.send.disabled = !connected || !el.text.value.trim();
+    el.text.placeholder = connected ? "Type a request and press Enter" : "Waiting for Jarvis…";
+  }
+
+  function setRecording(on) {
+    recording = on;
+    el.mic.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  el.mic.addEventListener("click", () => {
+    if (!voice) return;
+    if (send("ptt", { action: recording ? "stop" : "start" })) setRecording(!recording);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && recording && !pending) { // throw the recording away
+      if (send("ptt", { action: "cancel" })) setRecording(false);
+    }
+  });
+
+  function sendText() {
+    const text = el.text.value.trim();
+    if (!text || text.length > MAX_TEXT) return;
+    if (send("text_input", { text })) {
+      el.text.value = "";
+      updateCount();
+    }
+  }
+
+  function updateCount() {
+    const length = el.text.value.length;
+    el.count.textContent = length >= COUNT_FROM ? length.toLocaleString() + " / " + MAX_TEXT.toLocaleString() : "";
+    el.count.classList.toggle("near", length >= COUNT_FROM);
+    el.send.disabled = !connected || !el.text.value.trim();
+  }
+
+  el.text.addEventListener("input", updateCount);
+  el.text.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      sendText();
+    }
+  });
+  el.send.addEventListener("click", sendText);
+
+  // --- approval dialog ---------------------------------------------------------------------------
+
+  function openConfirm(data) {
+    const id = str(data.request_id);
+    const seconds = Number(data.expires_in_s);
+    if (!id || !Number.isFinite(seconds) || seconds <= 0) return;
+    if (pending && pending.id === id) return; // already showing it (snapshot after a reconnect)
+    closeConfirm();
+    el.confirmAction.textContent = str(data.action) || "Action";
+    el.confirmTarget.textContent = str(data.target);
+    el.confirmTargetRow.hidden = !str(data.target);
+    el.confirmSummary.textContent = str(data.summary);
+    el.confirmTier.textContent = str(data.tier) || "CONFIRM";
+    el.approve.disabled = el.deny.disabled = false;
+    const returnFocus = document.activeElement;
+    pending = { id, summary: str(data.summary), deadline: Date.now() + seconds * 1000,
+                timer: setInterval(showTimeLeft, 250), returnFocus };
+    showTimeLeft();
+    el.confirm.hidden = false;
+    el.deny.focus(); // the safe choice has the focus: Enter never approves by accident
+  }
+
+  function showTimeLeft() {
+    if (!pending) return;
+    const left = Math.ceil((pending.deadline - Date.now()) / 1000);
+    el.confirmLeft.textContent = left > 0 ? "(" + left + " s left)" : "(time is up: waiting for Jarvis)";
+  }
+
+  function answer(approved) {
+    if (!pending || el.approve.disabled) return;
+    if (send("confirm_response", { request_id: pending.id, approved })) {
+      el.approve.disabled = el.deny.disabled = true; // the dialog closes on Jarvis's confirm_result
+    }
+  }
+
+  // The dialog closes only when Jarvis says the request is settled (protocol §6.5), or the connection drops.
+  function closeConfirm() {
+    if (!pending) return;
+    clearInterval(pending.timer);
+    const returnFocus = pending.returnFocus;
+    pending = null;
+    el.confirm.hidden = true;
+    if (returnFocus && typeof returnFocus.focus === "function" && !returnFocus.disabled) returnFocus.focus();
+  }
+
+  el.approve.addEventListener("click", () => answer(true));
+  el.deny.addEventListener("click", () => answer(false));
+  el.confirm.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      answer(false);
+    } else if (event.key === "Tab") { // keep the focus inside the dialog
+      event.preventDefault();
+      (document.activeElement === el.deny ? el.approve : el.deny).focus();
+    }
+  });
+
   // --- messages from Jarvis -----------------------------------------------------------------------
+
+  function setVoice(value) {
+    if (typeof value !== "boolean") return;
+    voice = value;
+    if (!voice && recording) setRecording(false);
+    updateControls();
+    if (!alertTimer) showHint();
+  }
 
   const handlers = {
     hello_ack(data) {
       backoff = 1000;
+      connected = true;
       el.version.textContent = "v" + (str(data.server_version) || "1");
       el.conn.textContent = "Connected";
+      updateControls();
     },
     snapshot(data) {
       el.log.replaceChildren();
       for (const entry of Array.isArray(data.log) ? data.log.slice(-LOG_LIMIT) : []) {
-        if (!isObject(entry)) continue;
-        const role = entry.role === "user" ? "user" : entry.role === "error" ? "notice" : replyRole(entry.kind);
-        addLog(role, str(entry.text), entry.sources);
+        if (isObject(entry)) addLog(logRole(entry), str(entry.text), entry.sources);
       }
       if (!el.log.children.length) {
         const li = document.createElement("li");
         li.className = "empty";
-        li.textContent = "Nothing yet. Hold the talk key and ask something.";
+        li.textContent = "Nothing yet. Hold the talk key, tap the mic, or type below.";
         el.log.append(li);
       }
       el.lastUser.textContent = str(data.last_user);
       showLastReply(isObject(data.last_reply) ? data.last_reply : {});
+      setVoice(data.voice);
       setMode(str(data.mode) || "idle", data.detail);
+      if (isObject(data.confirm)) openConfirm(data.confirm);
+      else closeConfirm();
       el.log.scrollTop = el.log.scrollHeight;
     },
     state(data) {
+      setVoice(data.voice);
       setMode(str(data.mode), data.detail);
     },
     transcript(data) {
@@ -177,12 +323,27 @@
       if (role === "jarvis") showLastReply(data);
       addLog(role, str(data.text), data.sources);
     },
+    confirm_request(data) {
+      openConfirm(data);
+    },
+    confirm_result(data) {
+      if (!pending || str(data.request_id) !== pending.id) return;
+      const outcome = { approved: "approved", denied: "declined", expired: "not answered in time: declined" }[data.outcome];
+      const by = { voice: " by voice", screen: " on the HUD", terminal: " in the terminal" }[data.by] || "";
+      const summary = pending.summary;
+      closeConfirm();
+      if (outcome) {
+        addLog("approval", summary + " " + outcome + by + "."); // same wording as the server's log
+        showAlert(outcome.charAt(0).toUpperCase() + outcome.slice(1) + ".");
+      }
+    },
     error(data) {
       const message = str(data.message) || "Something went wrong.";
       if (data.code === "unauthorized") {
         refreshToken(); // Jarvis restarted with a new session token
         return;
       }
+      if (data.code === "voice_unavailable" && recording) setRecording(false);
       addLog("notice", message);
       showAlert(message);
     },
@@ -229,6 +390,10 @@
   function onClose() {
     clearInterval(pingTimer);
     socket = null;
+    connected = false;
+    setRecording(false); // the server cancels a recording when its page goes away
+    closeConfirm(); // can't be answered from here now; a pending one comes back with the next snapshot
+    updateControls();
     setMode("offline");
     el.conn.textContent = "Offline · retrying";
     setTimeout(connect, backoff);
@@ -274,6 +439,7 @@
   buildWave();
   tick();
   setInterval(tick, 1000);
+  updateControls();
   setMode("offline");
   connect();
 })();

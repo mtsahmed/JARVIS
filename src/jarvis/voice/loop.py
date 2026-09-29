@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -16,7 +17,9 @@ import psutil
 
 from jarvis.core.text import for_terminal
 from jarvis.core.chat import ChatSession
+from jarvis.core.approvals import VOICE_TIMEOUT_SECONDS, Approvals
 from jarvis.core.events import EventBus
+from jarvis.core.inbox import Item, Typed
 from jarvis.core.logging_setup import log_usage
 from jarvis.llm.base import LLMError
 from jarvis.voice.audio import SAMPLE_RATE, AudioError
@@ -55,8 +58,9 @@ _FILLER_WORDS = frozenset({"okay", "ok", "all", "right", "alright", "yeah", "yes
 _MIN_FILLER_RUN = 4
 _POLL_SECONDS = 0.2  # queue waits time out regularly so Ctrl+C works on Windows
 
-# Spoken approval for CONFIRM-tier actions. Anything else, including silence, means no.
-CONFIRM_WAIT_SECONDS = 10.0
+# Approval for CONFIRM-tier actions: an explicit yes (spoken, typed, or clicked on the HUD) within this
+# time. Anything else, including silence, means no.
+CONFIRM_WAIT_SECONDS = VOICE_TIMEOUT_SECONDS
 _YES_WORDS = frozenset({"yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "correct", "affirmative"})
 _YES_PHRASES = ("go ahead", "do it")
 _NO_WORDS = frozenset({"no", "not", "don't", "dont", "cancel", "stop", "wait", "never", "nope"})
@@ -91,6 +95,7 @@ class ConfirmRequest:
     """Sent from the LLM worker thread to the main thread, which asks the user by voice."""
 
     question: str
+    action: str = ""  # the tool's name
     done: threading.Event = field(default_factory=threading.Event)
     approved: bool = False
 
@@ -101,8 +106,8 @@ class _QueueConfirmer:
     def __init__(self, items: queue.Queue[Any]) -> None:
         self._items = items
 
-    def confirm(self, question: str) -> bool:
-        request = ConfirmRequest(question)
+    def confirm(self, question: str, action: str = "") -> bool:
+        request = ConfirmRequest(question, action)
         self._items.put(request)
         request.done.wait()
         return request.approved
@@ -124,16 +129,17 @@ class VoiceLoop:
         stt: STTAdapter,
         speaker: SpeakerLike,
         recorder: RecorderLike,
-        events: queue.Queue[str],
-        drain: Callable[[], None],
+        events: queue.Queue[Item],
         max_record_seconds: float,
         usage_sink: Callable[[dict[str, Any]], None] = log_usage,
         alerts: queue.Queue[str | BriefingAlert] | None = None,
         sources: Sources | None = None,
         briefing_speaker: SpeakerLike | None = None,
         bus: EventBus | None = None,
+        approvals: Approvals | None = None,
     ) -> None:
         self._bus = bus or EventBus()  # what Jarvis is doing, for displays such as the HUD
+        self._approvals = approvals or Approvals(self._bus)  # answerable by voice, typing, or the HUD
         self._mode: tuple[str, str] = ("", "")  # last published (mode, detail)
         self._briefing_speaker = briefing_speaker or speaker  # premium voice where config allows
         self._sources = sources  # web search sources: shown on screen after the answer, never spoken
@@ -142,8 +148,8 @@ class VoiceLoop:
         self._stt = stt
         self._speaker = speaker
         self._recorder = recorder
-        self._events = events
-        self._drain = drain
+        self._events = events  # the Inbox's queue: talk-key events and typed requests
+        self._pending: deque[Typed] = deque()  # typed requests that arrived while recording
         self._max_record_seconds = max_record_seconds
         self._usage_sink = usage_sink
 
@@ -155,17 +161,23 @@ class VoiceLoop:
             if event is None:
                 self.speak_alerts()
                 continue
-            if event != "start":
-                continue
-            samples = self._record()
-            if samples is not None:
-                try:
-                    self.handle_turn(samples, ended_at=time.perf_counter())
-                except Exception:
-                    logger.exception("Unexpected error during voice turn")
-                    print("[error] Something went wrong. Details are in logs/jarvis.log.")
-                    self._error("internal", "Something went wrong. Details are in the log.")
-            self._drain()  # ignore key presses made while Jarvis was busy
+            if isinstance(event, Typed):
+                turn: Callable[[], None] = lambda text=event.text: self.handle_typed(text)
+            elif event == "start":
+                samples = self._record()
+                if samples is None:
+                    self._set_mode("idle")
+                    continue
+                turn = lambda samples=samples: self.handle_turn(samples, ended_at=time.perf_counter())
+            else:
+                continue  # a stray "stop"/"cancel"
+            try:
+                turn()
+            except Exception:
+                logger.exception("Unexpected error during voice turn")
+                print("[error] Something went wrong. Details are in logs/jarvis.log.")
+                self._error("internal", "Something went wrong. Details are in the log.")
+            self._drain_keys()  # ignore key presses made while Jarvis was busy (typed requests stay)
             self.speak_alerts()
             self._set_mode("idle")
             print("\n(hold the key to talk)")
@@ -187,16 +199,35 @@ class VoiceLoop:
                 self._say(alert)
             self._set_mode("idle")
 
-    def _next_event(self, timeout: float | None = None) -> str | None:
+    def _next_event(self, timeout: float | None = None, keys_only: bool = False) -> Item | None:
+        """The next talk-key event or typed request (None on timeout). With keys_only, typed requests
+        are kept for later instead of returned."""
+        if self._pending and not keys_only:
+            return self._pending.popleft()
         deadline = None if timeout is None else time.monotonic() + timeout
         while deadline is None or time.monotonic() < deadline:
             try:
-                return self._events.get(timeout=_POLL_SECONDS)
+                event = self._events.get(timeout=_POLL_SECONDS)
             except queue.Empty:
                 continue
+            if isinstance(event, Typed) and keys_only:
+                self._pending.append(event)
+                continue
+            return event
         return None
 
+    def _drain_keys(self) -> None:
+        """Drop talk-key events that arrived while Jarvis was busy; keep typed requests for later."""
+        while True:
+            try:
+                event = self._events.get_nowait()
+            except queue.Empty:
+                return
+            if isinstance(event, Typed):
+                self._pending.append(event)
+
     def _record(self) -> np.ndarray | None:
+        """Record until "stop" (or the time cap). None if it could not start or was cancelled."""
         try:
             self._recorder.start()
         except AudioError as e:
@@ -205,10 +236,29 @@ class VoiceLoop:
             return None
         self._set_mode("listening")
         print("listening...", end="", flush=True)
-        self._next_event(timeout=self._max_record_seconds)  # "stop", or give up at the cap
+        deadline = time.monotonic() + self._max_record_seconds
+        event: Item | None = None
+        while event not in ("stop", "cancel") and (left := deadline - time.monotonic()) > 0:
+            event = self._next_event(timeout=left, keys_only=True)  # a repeated "start" is ignored
         samples = self._recorder.stop()
+        if event == "cancel":
+            print(" cancelled")
+            return None
         print(" done")
         return samples
+
+    def handle_typed(self, text: str) -> None:
+        """A typed request (terminal or HUD): handled like a spoken one, reply spoken aloud."""
+        try:
+            print(f"you typed> {for_terminal(text)}")
+            self._bus.transcript(text)
+            self._set_mode("thinking")
+            if is_reset_request(text):
+                self._reset()
+                return
+            self._respond(text, ended_at=time.perf_counter(), stt_ms=0, typed=True)
+        finally:
+            self._set_mode("idle")
 
     def handle_turn(self, samples: np.ndarray, ended_at: float) -> None:
         """Transcribe, ask the LLM, speak the reply. Never raises for provider failures."""
@@ -242,16 +292,22 @@ class VoiceLoop:
         print(f"you said> {for_terminal(transcript.text)}")
         self._bus.transcript(transcript.text)
         if is_reset_request(transcript.text):
-            self._session.reset()
-            print("(history cleared)")
-            self._answer("Okay, starting a new conversation.")
+            self._reset()
             return
+        self._respond(transcript.text, ended_at, stt_ms)
 
+    def _reset(self) -> None:
+        self._session.reset()
+        print("(history cleared)")
+        self._answer("Okay, starting a new conversation.")
+
+    def _respond(self, text: str, ended_at: float, stt_ms: int, typed: bool = False) -> None:
+        """Ask the LLM about `text` and speak the answer as it streams in."""
         # The LLM streams on a worker thread; this (main) thread speaks each sentence as soon as it
         # is complete, so Jarvis starts talking while the rest of the reply is still being written.
         sentences: queue.Queue[str | Ack | ConfirmRequest | None] = queue.Queue()
         outcome: dict[str, Any] = {}
-        worker = threading.Thread(target=self._stream_reply, args=(transcript.text, sentences, outcome), daemon=True)
+        worker = threading.Thread(target=self._stream_reply, args=(text, sentences, outcome), daemon=True)
         worker.start()
 
         until_speak_ms: int | None = None
@@ -274,7 +330,7 @@ class VoiceLoop:
                 if spoken:
                     print()
                 try:
-                    raw.approved = self._confirm_by_voice(raw.question)
+                    raw.approved = self._confirm(raw.question, raw.action)
                 finally:
                     raw.done.set()  # never leave the worker waiting
                 self._set_mode("thinking")
@@ -320,6 +376,7 @@ class VoiceLoop:
 
         self._usage_sink({
             "kind": "voice_turn",
+            "input": "typed" if typed else "voice",
             "stt_ms": stt_ms,
             "llm_ms": outcome["llm_ms"],  # full reply, start to finish
             "until_speak_ms": until_speak_ms,  # end of speech -> first sentence handed to TTS
@@ -327,29 +384,49 @@ class VoiceLoop:
             "rss_mb": round(psutil.Process().memory_info().rss / 1_048_576),
         })
 
-    def _confirm_by_voice(self, question: str) -> bool:
-        """Main thread: read the action back, then listen for an explicit spoken yes."""
+    def _confirm(self, question: str, action: str = "") -> bool:
+        """Main thread: ask aloud (the HUD shows the same request) and take the first answer: spoken,
+        typed, or clicked on the HUD. No answer in time means no."""
+        approval = self._approvals.open(question, action, timeout=CONFIRM_WAIT_SECONDS)
         print(f"jarvis> {for_terminal(question)} (hold the key and say yes to confirm)")
+        self._set_mode("confirm", question)
         self._say(f"{question} Say yes to confirm.")
         self._set_mode("confirm", question)
-        self._drain()  # ignore key presses made while the question was being read out
-        approved = False
-        if self._next_event(timeout=CONFIRM_WAIT_SECONDS) == "start" and (samples := self._record()) is not None:
-            self._set_mode("thinking")
-            try:
-                answer = self._stt.transcribe(samples).text
-            except STTError as e:
-                print(f"[error] {e}")
-                self._error("speech_recognition", str(e))
-                answer = ""
-            print(f"you said> {for_terminal(answer) or '(nothing)'}")
-            if answer:
-                self._bus.transcript(answer)
-            approved = is_yes(answer)
-        else:
+        # Typed requests queued before the question are not answers to it: set them aside.
+        earlier, self._pending = self._pending, deque()
+        try:
+            self._drain_keys()  # ignore key presses made while the question was being read out
+            while not approval.decided and (left := approval.seconds_left()) > 0:
+                event = self._next_event(timeout=min(left, _POLL_SECONDS))
+                if isinstance(event, Typed):
+                    answer, by = event.text, "screen" if event.source == "hud" else "terminal"
+                    print(f"you typed> {for_terminal(answer)}")
+                elif event == "start":
+                    samples = self._record()
+                    if samples is None or approval.decided:  # e.g. answered on the HUD meanwhile
+                        continue
+                    self._set_mode("thinking")
+                    answer, by = "", "voice"
+                    try:
+                        answer = self._stt.transcribe(samples).text
+                    except STTError as e:
+                        print(f"[error] {e}")
+                        self._error("speech_recognition", str(e))
+                    print(f"you said> {for_terminal(answer) or '(nothing)'}")
+                else:
+                    continue
+                if answer:
+                    self._bus.transcript(answer)
+                self._approvals.answer(approval.request_id, is_yes(answer), by)
+            self._approvals.expire(approval)  # no-op if it was answered
+        finally:
+            self._pending.extendleft(reversed(earlier))
+        if approval.by == "timeout":
             print("(no answer)")
-        self._say("Okay." if approved else "Okay, I won't.")
-        return approved
+        elif approval.by == "screen":
+            print(f"({'approved' if approval.approved else 'declined'} on the HUD)")
+        self._say("Okay." if approval.approved else "Okay, I won't.")
+        return approval.approved
 
     def _stream_reply(self, text: str, sentences: queue.Queue[str | Ack | ConfirmRequest | None], outcome: dict[str, Any]) -> None:
         """Worker thread: stream the LLM reply and queue complete sentences. Always ends with None."""

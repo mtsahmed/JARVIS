@@ -253,7 +253,7 @@ def test_scheduled_briefing_spoken_with_premium_voice() -> None:
     log: list[tuple[str, str]] = []
     alerts: queue.Queue[Any] = queue.Queue()
     loop = VoiceLoop(ChatSession(CaptureLLM(), 3, usage_sink=lambda r: None), None, RecordingSpeaker("local", log),  # type: ignore[arg-type]
-                     recorder=None, events=queue.Queue(), drain=lambda: None, max_record_seconds=5,
+                     recorder=None, events=queue.Queue(), max_record_seconds=5,
                      usage_sink=lambda r: None, alerts=alerts, briefing_speaker=RecordingSpeaker("premium", log))
     alerts.put("Reminder: stretch")
     alerts.put(BriefingAlert("Good morning. One email from Sara.", "Important unread emails: ..."))
@@ -283,7 +283,7 @@ def test_on_demand_briefing_held_and_spoken_once_with_premium_voice(store: Remin
                             audit_sink=lambda r: None)
     session = ChatSession(BriefingLLM(), 3, usage_sink=lambda r: None, tools=registry)
     loop = VoiceLoop(session, FakeSTT(), RecordingSpeaker("local", log), recorder=None, events=queue.Queue(),  # type: ignore[arg-type]
-                     drain=lambda: None, max_record_seconds=5, usage_sink=lambda r: None,
+                     max_record_seconds=5, usage_sink=lambda r: None,
                      briefing_speaker=RecordingSpeaker("premium", log))
     loop.handle_turn(np.zeros(16_000, dtype=np.float32), ended_at=time.perf_counter())
     assert log == [("local", BRIEFING_ACK),

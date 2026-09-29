@@ -94,7 +94,7 @@ def voice_loop(stt: FakeSTT | None = None, llm: FakeLLM | None = None, speaker: 
     bus = EventBus()
     session = ChatSession(llm or FakeLLM(("Four. ", "Easy.")), history_turns=5, usage_sink=lambda r: None)
     loop = VoiceLoop(session, stt or FakeSTT(), speaker or FakeSpeaker(), recorder=None, events=queue.Queue(),
-                     drain=lambda: None, max_record_seconds=5, usage_sink=lambda r: None, sources=sources,
+                     max_record_seconds=5, usage_sink=lambda r: None, sources=sources,
                      alerts=alerts, bus=bus)
     return loop, Recorder(bus)
 
@@ -153,7 +153,8 @@ def test_confirmation_publishes_confirm_mode_with_the_question() -> None:
     loop._bus = bus
     loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())
     confirm = [e.data for e in rec.events if e.type == "state" and e.data["mode"] == "confirm"]
-    assert opened == ["budget.xlsx"] and confirm == [{"mode": "confirm", "detail": "Open budget.xlsx?"}]
+    # confirm (the dialog opens) -> speaking (the question is read out) -> confirm (waiting for the answer)
+    assert opened == ["budget.xlsx"] and confirm == [{"mode": "confirm", "detail": "Open budget.xlsx?"}] * 2
     assert rec.modes().index("confirm") < rec.modes().index("listening")  # then the spoken answer
     assert [t["text"] for t in rec.of("transcript")] == ["open my budget", "Yes."]
     assert rec.modes()[-1] == "idle"
@@ -173,7 +174,7 @@ def test_reminders_and_briefings_are_published_as_replies() -> None:
 def test_no_events_needed_without_a_bus() -> None:
     session = ChatSession(FakeLLM(), history_turns=5, usage_sink=lambda r: None)
     speaker = FakeSpeaker()
-    loop = VoiceLoop(session, FakeSTT(), speaker, recorder=None, events=queue.Queue(), drain=lambda: None,
+    loop = VoiceLoop(session, FakeSTT(), speaker, recorder=None, events=queue.Queue(),
                      max_record_seconds=5, usage_sink=lambda r: None)
     loop.handle_turn(ONE_SECOND, ended_at=time.perf_counter())  # works exactly as before
     assert speaker.spoken == ["Four."]

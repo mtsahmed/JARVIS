@@ -16,11 +16,12 @@ from typing import Any
 VERSION = 1
 MAX_MESSAGE_BYTES = 64 * 1024
 
-# UI-2 is one-way: the page may only say hello and ping.
-CLIENT_TYPES = frozenset({"hello", "ping"})
-# Defined by the protocol for later phases (UI-3); ignored and logged for now.
-LATER_CLIENT_TYPES = frozenset({"ptt", "text_input", "confirm_response"})
+# Everything a page may send (UI-3). There are intentionally no others: the page cannot run tools,
+# change settings, or read files.
+CLIENT_TYPES = frozenset({"hello", "ping", "ptt", "text_input", "confirm_response"})
 CLIENTS = frozenset({"hud", "widget"})
+PTT_ACTIONS = frozenset({"start", "stop", "cancel"})
+MAX_TEXT_INPUT = 2000  # characters
 
 _ENVELOPE_KEYS = frozenset({"v", "type", "id", "ts", "data"})
 _MAX_ID = 64
@@ -76,13 +77,25 @@ def parse_client(raw: str | bytes) -> ClientMessage | None:
         raise ProtocolError("bad_message", "Bad type or id.")
     if not isinstance(ts, str) or len(ts) > _MAX_TS or not isinstance(data, dict):
         raise ProtocolError("bad_message", "Bad ts or data.")
-    if kind not in CLIENT_TYPES:  # unknown, or a later phase's type (LATER_CLIENT_TYPES): ignored
+    if kind not in CLIENT_TYPES:  # unknown: ignored
         return None
     if kind == "hello":
         token, client = data.get("token"), data.get("client")
         if set(data) != {"token", "client"} or not isinstance(token, str) or not 0 < len(token) <= _MAX_TOKEN \
                 or client not in CLIENTS:
             raise ProtocolError("bad_message", "hello needs a token and client (hud or widget).")
+    elif kind == "ptt":
+        if set(data) != {"action"} or data["action"] not in PTT_ACTIONS:
+            raise ProtocolError("bad_message", "ptt needs an action: start, stop or cancel.")
+    elif kind == "text_input":
+        text = data.get("text")
+        if set(data) != {"text"} or not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_INPUT:
+            raise ProtocolError("bad_message", f"text_input needs text of 1 to {MAX_TEXT_INPUT} characters.")
+    elif kind == "confirm_response":
+        request_id, approved = data.get("request_id"), data.get("approved")
+        if set(data) != {"request_id", "approved"} or not isinstance(request_id, str) \
+                or not 0 < len(request_id) <= _MAX_ID or type(approved) is not bool:
+            raise ProtocolError("bad_message", "confirm_response needs a request_id and approved (true or false).")
     elif data:  # ping
         raise ProtocolError("bad_message", "ping takes no data.")
     return ClientMessage(kind, message_id, data)

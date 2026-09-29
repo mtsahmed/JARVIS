@@ -47,10 +47,10 @@ def parse_key(name: str) -> keyboard.Key | keyboard.KeyCode:
 class HotkeyListener:
     """Feeds "start"/"stop" events for one key into a queue from pynput's listener thread."""
 
-    def __init__(self, key_name: str) -> None:
+    def __init__(self, key_name: str, events: queue.Queue | None = None) -> None:
         self._key = parse_key(key_name)
         self._ptt = PushToTalk()
-        self.events: queue.Queue[PTTEvent] = queue.Queue()
+        self.events: queue.Queue = events if events is not None else queue.Queue()  # e.g. the Inbox's queue
         self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
 
     # Callbacks run on pynput's thread and must return quickly (they delay input system-wide).
@@ -67,14 +67,6 @@ class HotkeyListener:
 
     def stop(self) -> None:
         self._listener.stop()
-
-    def drain(self) -> None:
-        """Drop key events that arrived while Jarvis was busy."""
-        while True:
-            try:
-                self.events.get_nowait()
-            except queue.Empty:
-                return
 
 
 def _key_test(seconds: float = 20.0) -> None:

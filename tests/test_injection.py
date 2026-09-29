@@ -60,7 +60,7 @@ class OnlyApprove:
     def __init__(self, expected_question: str) -> None:
         self.expected, self.asked = expected_question, []
 
-    def confirm(self, question: str) -> bool:
+    def confirm(self, question: str, action: str = "") -> bool:
         self.asked.append(question)
         return question == self.expected
 
