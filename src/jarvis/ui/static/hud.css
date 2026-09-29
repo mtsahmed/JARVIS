@@ -164,10 +164,16 @@ body[data-mode="speaking"] .wave span { animation: bar 0.55s ease-in-out var(--d
 .sources:empty { display: none; }
 .sources a { overflow-wrap: anywhere; }
 
-/* --- footer (disabled in UI-2) ------------------------------------------------------------------ */
+/* --- footer: mic, text box, send ------------------------------------------------------------------ */
+
+[hidden] { display: none !important; }
 
 .mic { width: 60px; height: 60px; border-radius: 50%; border: 2px solid var(--mode); background: rgba(10, 20, 32, 0.9);
-  color: var(--text); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  color: var(--text); display: flex; align-items: center; justify-content: center; flex-shrink: 0; cursor: pointer; }
+.mic[aria-pressed="true"] { background: rgba(91, 214, 240, 0.25); box-shadow: 0 0 18px rgba(91, 214, 240, 0.35); }
+.mic:not(:disabled):hover, .send:not(:disabled):hover { background: rgba(91, 214, 240, 0.14); }
+.count { font-size: 11px; color: var(--text-2); min-width: 0; }
+.count.near { color: var(--amber); }
 .mic svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .input-wrap { flex-grow: 1; display: flex; }
 .input { flex-grow: 1; height: 48px; padding: 0 16px; border-radius: 8px; border: 1px solid rgba(91, 214, 240, 0.3);
@@ -175,7 +181,31 @@ body[data-mode="speaking"] .wave span { animation: bar 0.55s ease-in-out var(--d
 .input::placeholder { color: #6F8796; }
 .send { height: 48px; padding: 0 20px; border-radius: 8px; border: 1px solid var(--accent); background: transparent;
   color: var(--accent); font-family: var(--display); font-weight: 600; font-size: 15px; letter-spacing: 0.2em; }
+.send { cursor: pointer; }
 .mic:disabled, .input:disabled, .send:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* --- approval dialog (docs/ui-design.md: dim overlay, 540 px amber card) ------------------------ */
+
+.overlay { position: fixed; inset: 0; background: rgba(4, 7, 12, 0.72); display: flex; align-items: center;
+  justify-content: center; padding: 16px; z-index: 10; }
+.dialog { width: 540px; max-width: 100%; border: 1px solid var(--amber); border-radius: 12px; background: #0B121C;
+  padding: 28px; display: flex; flex-direction: column; gap: 18px; box-shadow: 0 0 40px rgba(242, 165, 65, 0.25); }
+.dialog-title { margin: 0; font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: 0.22em; color: var(--amber); }
+.confirm-rows { margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; line-height: 1.55; }
+.confirm-rows div { display: flex; gap: 8px; }
+.confirm-rows dt { color: var(--text-2); min-width: 72px; }
+.confirm-rows dd { margin: 0; overflow-wrap: anywhere; }
+.confirm-hint { margin: 0; font-size: 12px; color: var(--text-2); }
+#confirm-left { color: var(--amber); }
+.confirm-buttons { display: flex; gap: 12px; justify-content: flex-end; }
+.deny, .approve { height: 46px; padding: 0 22px; border-radius: 8px; font-family: var(--display); font-weight: 600;
+  font-size: 15px; letter-spacing: 0.2em; cursor: pointer; }
+.deny { border: 1px solid var(--text-2); background: transparent; color: var(--text); }
+.approve { border: 1px solid var(--amber); background: var(--amber); color: #1A1206; font-weight: 700; }
+.deny:disabled, .approve:disabled { opacity: 0.5; cursor: wait; }
+.dialog :focus-visible { outline-color: var(--amber); }
+
+.log .approval .who { color: var(--amber); }
 
 /* --- animation ---------------------------------------------------------------------------------- */
 

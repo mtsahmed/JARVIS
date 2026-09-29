@@ -89,16 +89,35 @@
   </aside>
 
   <footer class="bottom">
-    <button type="button" class="mic" aria-label="Talk (arrives in a later update; hold the talk key for now)" disabled>
+    <button type="button" id="mic" class="mic" aria-label="Talk: tap to start, tap again to send" aria-pressed="false" disabled>
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
     </button>
     <label class="input-wrap">
-      <span class="sr-only">Type a command</span>
-      <input type="text" class="input" placeholder="Typing arrives in a later update. Hold the talk key to speak." disabled>
+      <span class="sr-only">Type a request</span>
+      <input type="text" id="text" class="input" maxlength="2000" autocomplete="off" spellcheck="true"
+             placeholder="Type a request and press Enter" disabled>
     </label>
-    <button type="button" class="send" disabled>SEND</button>
+    <span id="count" class="count" aria-hidden="true"></span>
+    <button type="button" id="send" class="send" disabled>SEND</button>
   </footer>
 
+</div>
+
+<div id="confirm" class="overlay" hidden>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-summary">
+    <h2 id="confirm-title" class="dialog-title">CONFIRMATION REQUIRED</h2>
+    <dl class="confirm-rows">
+      <div><dt>Action</dt><dd id="confirm-action"></dd></div>
+      <div id="confirm-target-row" hidden><dt>To</dt><dd id="confirm-target"></dd></div>
+      <div><dt>Request</dt><dd id="confirm-summary"></dd></div>
+      <div><dt>Tier</dt><dd id="confirm-tier"></dd></div>
+    </dl>
+    <p class="confirm-hint">Say “yes” to approve, or choose below. Silence or anything else cancels. <span id="confirm-left"></span></p>
+    <div class="confirm-buttons">
+      <button type="button" id="deny" class="deny">DENY</button>
+      <button type="button" id="approve" class="approve">APPROVE</button>
+    </div>
+  </div>
 </div>
 </body>
 </html>
