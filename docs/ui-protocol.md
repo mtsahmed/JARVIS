@@ -1,6 +1,6 @@
 # Jarvis UI Protocol (v1)
 
-Status: UI-2 implemented (`src/jarvis/ui/`) · Last updated: 2026-09-28
+Status: UI-2 and UI-3 implemented (`src/jarvis/ui/`) · Last updated: 2026-09-29
 Scope: messages between the Jarvis core (Python) and the HUD front end over a local WebSocket.
 
 ## 1. Principles
@@ -16,6 +16,8 @@ Scope: messages between the Jarvis core (Python) and the HUD front end over a lo
 - The client's **first message must be `hello`** with that token. Wrong token, or no `hello` within 5 s → server closes the connection.
 - Server also rejects connections whose `Origin` header is not the local page, and any request whose `Host` is not `127.0.0.1:<port>` (HTTP 403).
 - Refusals: the server sends `error` (`unauthorized`, `hello_timeout`, `version_mismatch`, `rate_limited`; `recoverable: false`) and closes with code 1008. Too large a message closes with 1009. At most 3 pages at once (the 4th gets HTTP 503); at most 100 messages per 10 s per page.
+- After hello, other errors keep the page connected (`recoverable: true`): `bad_message`, `rate_limited` (more than 10 `text_input` a minute), `voice_unavailable` (`ptt` while Jarvis runs in text mode), `unavailable`.
+- A page that closes while its `ptt start` is open cancels the recording (the server sends `cancel`).
 - Each Jarvis run has a new token. On `unauthorized` the page re-reads the token from `/` (same origin) and reconnects.
 - Heartbeat: client sends `ping` every 15 s; server answers `pong`. No `pong` for 30 s → client reconnects with backoff (1 s, 2 s, 4 s … max 30 s).
 - After every (re)connect, the server sends a full `snapshot`.
@@ -38,13 +40,13 @@ Max message size: 64 KB. Max `text_input` length: 2,000 characters.
 | Type | `data` | When |
 |---|---|---|
 | `hello_ack` | `{ "session": "id", "server_version": "x.y.z" }` | After a valid `hello` |
-| `snapshot` | `{ "mode", "detail", "last_user", "last_reply", "log": [...], "reminders": [...], "usage": [...], "providers": [...], "system": {...} }` (same shapes as below; `log` entries are `{ "role": "user" \| "jarvis" \| "error", "text", "ts", "sources"?, "kind"? }`, last 50; reminders/usage/providers/system are empty until UI-4) | On connect/reconnect |
-| `state` | `{ "mode": "idle" \| "listening" \| "thinking" \| "speaking" \| "confirm" \| "error", "detail": "optional text" }` | Every mode change |
+| `snapshot` | `{ "mode", "detail", "voice", "confirm", "last_user", "last_reply", "log": [...], "reminders": [...], "usage": [...], "providers": [...], "system": {...} }` (same shapes as below; `confirm`: the open approval (same shape as `confirm_request`, `expires_in_s` = time left) or null; `log` entries are `{ "role": "user" \| "jarvis" \| "error" \| "approval", "text", "ts", "sources"?, "kind"? }`, last 50; reminders/usage/providers/system are empty until UI-4) | On connect/reconnect |
+| `state` | `{ "mode": "idle" \| "listening" \| "thinking" \| "speaking" \| "confirm" \| "error", "detail": "optional text", "voice": true \| false }` (`voice`: the mic button works) | Every mode change |
 | `transcript` | `{ "text": "...", "final": false }` | Speech-to-text partial/final results (today's speech recognition is batch, so only `final: true` is sent; text typed in the terminal is sent the same way) |
 | `reply` | `{ "text": "...", "sources": [ { "title": "...", "url": "https://..." } ], "kind": "answer" \| "reminder" \| "briefing" }` | Jarvis's answer (sources optional; `kind` defaults to answer). In voice mode it is sent once the answer is complete, which is **after** `state speaking`, because Jarvis starts speaking while the reply is still streaming |
 | `audio_level` | `{ "source": "mic" \| "tts", "level": 0.0–1.0 }` | Max 20/s, only while listening or speaking |
 | `confirm_request` | `{ "request_id": "uuid4", "action": "Send WhatsApp message", "target": "...", "summary": "...", "tier": "CONFIRM", "expires_in_s": 15 }` | A CONFIRM-tier tool needs approval |
-| `confirm_result` | `{ "request_id": "...", "outcome": "approved" \| "denied" \| "expired", "by": "voice" \| "screen" \| "timeout" }` | Decision made (from any channel) |
+| `confirm_result` | `{ "request_id": "...", "outcome": "approved" \| "denied" \| "expired", "by": "voice" \| "screen" \| "terminal" \| "timeout" }` | Decision made (from any channel) |
 | `reminders` | `{ "items": [ { "id": "...", "due_at": "ISO 8601", "text": "..." } ] }` | On change |
 | `usage` | `{ "items": [ { "provider": "openai", "used": 1.62, "limit": 4.0, "unit": "USD" \| "credits" \| "queries", "period": "month" \| "day" } ] }` | On change, max once per 10 s |
 | `providers` | `{ "items": [ { "name": "llm" \| "stt" \| "tts" \| "search", "status": "ok" \| "degraded" \| "down", "detail": "optional" } ] }` | On change |
@@ -67,7 +69,7 @@ There are intentionally **no other commands**. The UI cannot run tools, change s
 1. Only the permission layer creates a `confirm_request`. The UI shows it; the voice layer asks aloud at the same time.
 2. The **first** answer wins (voice or screen). Every later answer for that `request_id` is ignored and logged.
 3. `request_id` is single-use and must match a pending request, otherwise ignore and log.
-4. No answer before `expires_in_s` → **denied** (`outcome: "expired"`).
+4. No answer before `expires_in_s` → **denied** (`outcome: "expired"`). Voice mode: 15 s; text mode: 60 s (typing is slower). An answer arriving after the deadline counts as no.
 5. The server always sends `confirm_result`; the UI closes the dialog only on that message, never on its own click.
 6. Every decision goes to the audit log with `by`.
 

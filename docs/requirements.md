@@ -76,7 +76,7 @@ Later: Google Calendar, WhatsApp (official WhatsApp Business Platform only; unof
 | 5 | Integrations & automation (built 2026-09-28; week-long check running) | Gmail read-only briefing, scheduled jobs | Morning briefing runs daily for a week |
 | 6 | Hardening & tests ✅ | Test suite, prompt-injection tests, threat review | Tests pass; injection test blocked |
 | 7 | Deployment & monitoring ✅ | Auto-start on login, health checks, backups, usage alerts | Survives reboot; alerts on failure or budget |
-| UI | HUD (separate track: `docs/ui-design.md`, `docs/ui-protocol.md`) | UI-2 display ✅ · UI-3 two-way · UI-4 live data · UI-5 compact widget | See §15 |
+| UI | HUD (separate track: `docs/ui-design.md`, `docs/ui-protocol.md`) | UI-2 display ✅ · UI-3 two-way ✅ · UI-4 live data · UI-5 compact widget | See §15–16 |
 | 8 | Expansion (on hold, owner decision) | WhatsApp (official API), calendar, wake word, voice upgrade | Only after 1–7 are stable |
 
 ## 8. Open items
@@ -205,3 +205,14 @@ Local errors were on non-reminder commands ("Open" → "On", "car insurance" →
 - **UI-2C Page:** `ui/static/` (plain HTML/CSS/JS, no build step). Orb with four rings and per-mode speeds and colours, state title and hint, waveform, last exchange with https source links, conversation log (last 50), clock. Reminders, usage, system and service chips show "later update" (UI-4); mic, text box and Send are disabled (UI-3). All text via `textContent`; no inline code or styles; fonts bundled (SIL OFL). Reconnects with backoff (1 s … 30 s), re-reads the token after Jarvis restarts, pauses animation when hidden, respects reduced motion.
 - **Tests:** 82 new (event bus and loop publishing, protocol checks, server security, bus-to-page delivery, static-file rules): 407 in total. Checked by eye in Chrome with a scripted demo (states, log, sources, offline and recovery).
 - **UI-2 done-when met:** the page shows Jarvis's live state (mode, what you said, replies, errors) and recovers on its own when Jarvis restarts.
+
+## 16. UI-3 two-way HUD (2026-09-29)
+
+**Owner decisions:** approvals from the screen (approve and deny) as well as by voice, first answer wins; replies to typed requests are spoken in voice mode; the HUD's text box also works in text mode.
+
+- **UI-3A Inbox:** `core/inbox.py`, one queue for talk-key events (`start`, `stop`, new `cancel`) and typed requests (terminal or HUD, max 2,000 characters). Voice mode handles a typed request as a full turn with a spoken reply; text typed while recording waits its turn; key presses made while Jarvis is busy are still dropped, typed requests are kept. Text mode reads the terminal on a background thread, so the HUD can type too; commands like `/exit` work only from the terminal.
+- **UI-3B Approvals:** `core/approvals.py`. Each CONFIRM request gets a single-use id and is published (the HUD shows it) while the voice layer asks aloud; the first answer wins (spoken, typed, or clicked), later or unknown answers are ignored and logged; no answer in time is denied (15 s in voice mode, 60 s in text mode); every decision is audited with the action, outcome and who decided (`voice`, `screen`, `terminal`, `timeout`).
+- **UI-3C Server:** accepts `ptt`, `text_input` and `confirm_response`, each strictly checked. The mic works only in voice mode; a page that closes mid-recording cancels it; at most 10 typed requests a minute per page. Sends `confirm_request` / `confirm_result`; snapshots carry the open approval (with time left) and whether voice is on.
+- **UI-3D Page:** tap-to-talk mic (Esc cancels), text box (Enter or Send, counter near 2,000), the approval dialog from the design (Deny has the focus, Esc denies, countdown, closes only on Jarvis's result, focus stays in the dialog). Decisions appear in the conversation log.
+- **Tests:** 54 new (inbox, approvals, two-way server, protocol checks): 462 in total. Checked by eye in Chrome with a demo that plays Jarvis: typing, the mic button, Approve and Esc-to-deny, audit entries `by: screen`.
+- **UI-3 done-when met:** everything the voice and text loops take (talking, typing, approvals) can also be done on the HUD, and the core stays in charge.
