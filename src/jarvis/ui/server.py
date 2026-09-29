@@ -30,7 +30,9 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from jarvis.core.approvals import Approvals
 from jarvis.core.events import EventBus
+from jarvis.core.inbox import Inbox
 from jarvis.ui.hub import Hub, send_to
 from jarvis.ui.protocol import MAX_MESSAGE_BYTES, ProtocolError, envelope, error_message, parse_client
 
@@ -43,6 +45,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 MAX_CLIENTS = 3
 HELLO_TIMEOUT_SECONDS = 5.0
 RATE_LIMIT = (100, 10.0)  # at most 100 messages per 10 s from one page (it pings every 15 s)
+TEXT_LIMIT = (10, 60.0)  # at most 10 typed requests a minute from one page: each one costs an OpenAI call
 TOKEN_PLACEHOLDER = "{{JARVIS_SESSION_TOKEN}}"
 POLICY_VIOLATION = 1008  # WebSocket close code
 
@@ -71,8 +74,11 @@ def _server_version() -> str:
 
 class HudServer:
     def __init__(self, bus: EventBus, port: int, static_dir: Path = STATIC_DIR,
-                 hello_timeout: float = HELLO_TIMEOUT_SECONDS) -> None:
+                 hello_timeout: float = HELLO_TIMEOUT_SECONDS, inbox: Inbox | None = None,
+                 approvals: Approvals | None = None) -> None:
         self._bus, self._requested_port, self._static_dir = bus, port, static_dir
+        # Where the page's input goes (UI-3). Without them the page can only watch.
+        self._inbox, self._approvals = inbox, approvals
         self._hello_timeout = hello_timeout
         self._token = secrets.token_urlsafe(32)
         self._session = uuid.uuid4().hex  # shown to pages; not a secret (unlike the token)
@@ -110,7 +116,8 @@ class HudServer:
             raise UIError(f"port {self._requested_port} is not available ({e.strerror or e}); "
                           "set another JARVIS_UI_PORT") from None
         self._port = sock.getsockname()[1]
-        self._hub = Hub(self._bus)
+        inbox = self._inbox
+        self._hub = Hub(self._bus, voice_available=lambda: inbox is not None and inbox.voice)
         self._thread = threading.Thread(target=self._run, args=(sock,), name="hud-server", daemon=True)
         self._thread.start()
         if not self._ready.wait(timeout) or self._startup_error is not None:
@@ -248,26 +255,54 @@ class HudServer:
     async def _receive(self, page: asyncio.Queue[str], connection: ServerConnection) -> None:
         limit, window = RATE_LIMIT
         times: list[float] = []
-        async for raw in connection:
-            now = time.monotonic()
-            times = [t for t in times if now - t < window] + [now]
-            if len(times) > limit:
-                await self._refuse(connection, "rate_limited", "Too many messages.")
-                return
-            try:
-                message = parse_client(raw)
-            except ProtocolError as e:
-                logger.warning("HUD message rejected: %s", e.code)
-                if e.fatal:
-                    await self._refuse(connection, e.code, e.message)
+        typed: list[float] = []
+        recording = False  # this page pressed its mic button and has not released it yet
+        try:
+            async for raw in connection:
+                now = time.monotonic()
+                times = [t for t in times if now - t < window] + [now]
+                if len(times) > limit:
+                    await self._refuse(connection, "rate_limited", "Too many messages.")
                     return
-                send_to(page, error_message(e.code, e.message))
-                continue
-            if message is None:
-                logger.info("HUD message ignored (type not handled in this phase)")
-            elif message.type == "ping":
-                send_to(page, envelope("pong"))
-            # a second hello is harmless and ignored
+                try:
+                    message = parse_client(raw)
+                except ProtocolError as e:
+                    logger.warning("HUD message rejected: %s", e.code)
+                    if e.fatal:
+                        await self._refuse(connection, e.code, e.message)
+                        return
+                    send_to(page, error_message(e.code, e.message))
+                    continue
+                if message is None:
+                    logger.info("HUD message ignored (unknown type)")
+                elif message.type == "ping":
+                    send_to(page, envelope("pong"))
+                elif message.type == "ptt":
+                    recording = self._ptt(page, message.data["action"], recording)
+                elif message.type == "text_input":
+                    typed = [t for t in typed if now - t < TEXT_LIMIT[1]]
+                    if len(typed) >= TEXT_LIMIT[0]:
+                        send_to(page, error_message("rate_limited", "Too many typed requests. Wait a moment."))
+                    elif self._inbox is None or not self._inbox.type(message.data["text"], "hud"):
+                        send_to(page, error_message("unavailable", "Jarvis can't take typed requests right now."))
+                    else:
+                        typed.append(now)
+                elif message.type == "confirm_response" and self._approvals is not None:
+                    # Only an open request can be answered, once (first answer wins); anything else is
+                    # ignored and logged by Approvals. The page closes its dialog on confirm_result.
+                    self._approvals.answer(message.data["request_id"], message.data["approved"], "screen")
+                # a second hello is harmless and ignored
+        finally:
+            if recording and self._inbox is not None:
+                self._inbox.key("cancel")  # the page went away mid-recording: throw the recording away
+
+    def _ptt(self, page: asyncio.Queue[str], action: str, recording: bool) -> bool:
+        """The page's mic button: the same as the talk key. Returns whether this page is recording."""
+        if self._inbox is None or not self._inbox.voice:
+            send_to(page, error_message("voice_unavailable", "The microphone works only in voice mode."))
+            return False
+        self._inbox.key(action)
+        return action == "start"
 
     @staticmethod
     async def _send_from(page: asyncio.Queue[str], connection: ServerConnection) -> None:

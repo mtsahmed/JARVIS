@@ -27,9 +27,34 @@ def test_valid_hello_and_ping() -> None:
     assert ping is not None and ping.type == "ping" and ping.id == "abc"
 
 
-@pytest.mark.parametrize("type", ["ptt", "text_input", "confirm_response", "run_tool", "shutdown"])
-def test_later_phase_and_unknown_types_are_ignored(type: str) -> None:
-    assert parse_client(msg(type, {"anything": 1})) is None  # the UI can't do anything else in UI-2
+@pytest.mark.parametrize("type", ["run_tool", "shutdown", "read_file", "set_config", "PTT"])
+def test_unknown_types_are_ignored(type: str) -> None:
+    assert parse_client(msg(type, {"anything": 1})) is None  # the page can't do anything else
+
+
+def test_valid_ui3_messages() -> None:
+    for action in ("start", "stop", "cancel"):
+        assert parse_client(msg("ptt", {"action": action})).data == {"action": action}  # type: ignore[union-attr]
+    assert parse_client(msg("text_input", {"text": "x" * 2000})) is not None
+    reply = parse_client(msg("confirm_response", {"request_id": "abc", "approved": False}))
+    assert reply is not None and reply.data == {"request_id": "abc", "approved": False}
+
+
+@pytest.mark.parametrize(("type", "data"), [
+    ("ptt", {}), ("ptt", {"action": "record"}), ("ptt", {"action": "start", "x": 1}), ("ptt", {"action": 1}),
+    ("text_input", {}), ("text_input", {"text": ""}), ("text_input", {"text": "   "}),
+    ("text_input", {"text": "x" * 2001}), ("text_input", {"text": 5}), ("text_input", {"text": "hi", "tool": "x"}),
+    ("confirm_response", {"request_id": "abc"}), ("confirm_response", {"approved": True}),
+    ("confirm_response", {"request_id": "abc", "approved": "yes"}),  # must be a real true/false
+    ("confirm_response", {"request_id": "abc", "approved": 1}),
+    ("confirm_response", {"request_id": "", "approved": True}),
+    ("confirm_response", {"request_id": "x" * 65, "approved": True}),
+    ("confirm_response", {"request_id": "abc", "approved": True, "by": "voice"}),  # the page can't claim a channel
+])
+def test_malformed_ui3_messages_are_rejected(type: str, data: dict[str, Any]) -> None:
+    with pytest.raises(ProtocolError) as error:
+        parse_client(msg(type, data))
+    assert error.value.code == "bad_message" and not error.value.fatal
 
 
 @pytest.mark.parametrize("raw", [

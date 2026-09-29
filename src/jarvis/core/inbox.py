@@ -32,6 +32,7 @@ Item = Union[str, Typed]  # a KeyEvent, END, or a Typed request
 class Inbox:
     def __init__(self) -> None:
         self.queue: queue.Queue[Item] = queue.Queue()
+        self.voice = False  # True while voice mode runs (talk-key events are only used then)
 
     def key(self, action: str) -> None:
         if action not in KEY_EVENTS:

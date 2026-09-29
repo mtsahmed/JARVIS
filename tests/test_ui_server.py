@@ -230,15 +230,26 @@ def test_flooding_is_cut_off(hud: HudServer, monkeypatch: pytest.MonkeyPatch) ->
 # --- the WebSocket: after hello ---------------------------------------------------------------------
 
 
-def test_ping_pong_bad_messages_and_later_types(hud: HudServer) -> None:
+def test_ping_pong_bad_messages_and_unknown_types(hud: HudServer) -> None:
     with open_ws(hud) as ws:
         hello(ws, hud)
         send(ws, "ping")
         assert receive(ws)["type"] == "pong"
         ws.send("not json")  # reported, but the page stays connected
         assert receive(ws)["data"]["code"] == "bad_message"
-        send(ws, "text_input", {"text": "delete everything"})  # UI-3 type: ignored in UI-2
+        send(ws, "run_tool", {"name": "delete_everything"})  # no such message: ignored
+        send(ws, "ping")
+        assert receive(ws)["type"] == "pong"
+
+
+def test_a_watch_only_server_turns_input_away(hud: HudServer) -> None:
+    with open_ws(hud) as ws:  # this server has no inbox or approvals: the page can only watch
+        hello(ws, hud)
+        send(ws, "text_input", {"text": "hello"})
+        assert receive(ws)["data"]["code"] == "unavailable"
         send(ws, "ptt", {"action": "start"})
+        assert receive(ws)["data"]["code"] == "voice_unavailable"
+        send(ws, "confirm_response", {"request_id": "abc", "approved": True})
         send(ws, "ping")
         assert receive(ws)["type"] == "pong"
 
@@ -254,7 +265,7 @@ def test_bus_events_reach_the_page(hud: HudServer) -> None:
         bus.error("speech_recognition", "Could not reach speech recognition.")
         got = [receive(ws) for _ in range(4)]
     assert [m["type"] for m in got] == ["state", "transcript", "reply", "error"]
-    assert got[0]["data"] == {"mode": "listening", "detail": ""}
+    assert got[0]["data"] == {"mode": "listening", "detail": "", "voice": False}
     assert got[1]["data"] == {"text": "what's the weather", "final": True}
     # Text is passed on as text (the page shows it with textContent); only https links are kept.
     assert got[2]["data"] == {"text": "<script>alert(1)</script> Sunny.",

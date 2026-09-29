@@ -483,9 +483,9 @@ def run_jarvis(config: Config, voice: bool) -> int:
         start_background_check(health_checks(config, llm, services.search, gmail, microphone=voice), alerts.problems)
 
     bus = EventBus()  # what Jarvis is doing, for displays such as the HUD
-    inbox = Inbox()  # talk-key events and typed requests (terminal; the HUD from UI-3C)
+    inbox = Inbox()  # talk-key events and typed requests (terminal, key, HUD)
     approvals = Approvals(bus)  # CONFIRM-tier approvals: by voice, typing, or the HUD
-    hud = start_hud(config, bus)
+    hud = start_hud(config, bus, inbox, approvals)
     try:
         if not (voice and run_voice(config, llm, services, alerts, scheduler, on_started=check_health, bus=bus,
                                     inbox=inbox, approvals=approvals)):
@@ -504,13 +504,13 @@ def run_jarvis(config: Config, voice: bool) -> int:
     return 0
 
 
-def start_hud(config: Config, bus: EventBus) -> Any:
+def start_hud(config: Config, bus: EventBus, inbox: Inbox | None = None, approvals: Approvals | None = None) -> Any:
     """Start the local HUD page if JARVIS_UI_ENABLED. A HUD that can't start never stops Jarvis."""
     if not config.ui_enabled:
         return None
     from jarvis.ui.server import HudServer, UIError  # only loads websockets when the HUD is on
 
-    hud = HudServer(bus, config.ui_port)
+    hud = HudServer(bus, config.ui_port, inbox=inbox, approvals=approvals)
     try:
         hud.start()
     except UIError as e:
@@ -561,6 +561,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
                      voice.max_record_seconds, alerts=alerts.voice_queue,
                      sources=services.sources, briefing_speaker=briefing_speaker, bus=bus, approvals=approvals)
     hotkey.start()
+    inbox.voice = True  # the HUD's mic button works from now on
     scheduler.start()
     on_started()
     print(f"Jarvis voice mode ({config.llm_model}, {voice.stt_model}). "
@@ -570,6 +571,7 @@ def run_voice(config: Config, llm: LLMAdapter, services: Services, alerts: Remin
     except KeyboardInterrupt:
         print("\nBye.")
     finally:
+        inbox.voice = False
         hotkey.stop()
     return True
 
